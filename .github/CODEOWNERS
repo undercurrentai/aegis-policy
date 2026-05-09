@@ -1,0 +1,25 @@
+# CODEOWNERS — undercurrentai/aegis-policy
+#
+# Default + path-specific ownership for the verifier policy + trust roots.
+# Per cosmic-flute §17 Critical 3: this repo has a stricter trust model than
+# the implementing repos. Every change requires explicit owner approval.
+#
+# Single owner today (sole engineer); documented growth path: when team grows,
+# replace `@ThermoclineLeviathan` with `@undercurrentai/security-reviewers`
+# (2-of-N team) and require 2 reviewers on `keys/`, `schema/`, `policy/` paths.
+
+# Default — every change requires owner approval
+*                                  @ThermoclineLeviathan
+
+# Trust-material paths — explicit + verbose to make scope obvious
+keys/                              @ThermoclineLeviathan
+schema/                            @ThermoclineLeviathan
+policy/                            @ThermoclineLeviathan
+.github/                           @ThermoclineLeviathan
+.github/workflows/                 @ThermoclineLeviathan
+
+# ADRs — architectural changes need owner sign-off
+docs/architecture/                 @ThermoclineLeviathan
+
+# Maintenance scripts (parity gate is load-bearing)
+scripts/                           @ThermoclineLeviathan
