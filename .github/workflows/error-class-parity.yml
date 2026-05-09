@@ -15,6 +15,7 @@ on:
     paths:
       - "policy/verifier-policy-v1.yaml"
       - "scripts/check_error_class_parity.py"
+      - "scripts/_verify_local_vendored.py"
       - ".github/workflows/error-class-parity.yml"
       - "requirements-dev.txt"
   push:
@@ -23,6 +24,7 @@ on:
     paths:
       - "policy/verifier-policy-v1.yaml"
       - "scripts/check_error_class_parity.py"
+      - "scripts/_verify_local_vendored.py"
   workflow_dispatch:
 
 permissions:
@@ -41,22 +43,12 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install liboqs system library (for [verify] extra import)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y liboqs-dev || (
-            sudo apt-get install -y cmake ninja-build &&
-            git clone --depth 1 --branch 0.14.0 https://github.com/open-quantum-safe/liboqs.git &&
-            cd liboqs &&
-            mkdir build && cd build &&
-            cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON .. &&
-            ninja &&
-            sudo ninja install &&
-            sudo ldconfig
-          )
-          echo "LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-
       - name: Install dev deps
+        # Note: no liboqs install needed — the parity check AST-walks the
+        # vendored `_verify_local.py` source file directly and never imports
+        # the SDK. See scripts/check_error_class_parity.py module docstring
+        # for why we vendor (aegis-governance>=0.5.0 not on PyPI; source
+        # repo is private).
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
