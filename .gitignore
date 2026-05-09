@@ -54,6 +54,9 @@ coverage.xml
 # /quality-gate per-run ephemera (state.json, mcp-cache, locks)
 .quality-gate/
 
+# /bug-hunt Codex run artifacts (per-task diffs, events, last_message)
+.codex_runs/
+
 # Local dev secrets
 .env
 .env.local

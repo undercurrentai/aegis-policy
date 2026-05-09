@@ -127,8 +127,21 @@ def load_actual_from_sdk() -> set[str]:
         )
         sys.exit(2)
 
+    verify_fn: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "verify_attestation_locally":
+            verify_fn = node
+            break
+
+    if verify_fn is None:
+        print(
+            "ERROR: verify_attestation_locally() not found in vendored SDK source",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     actual: set[str] = set()
-    for node in ast.walk(tree):
+    for node in ast.walk(verify_fn):
         # Look for `return (False, "AttestationXxx")` and `return (True, None)`
         # patterns. Only tuples; skip plain `return None` or single-value returns.
         if isinstance(node, ast.Return) and isinstance(node.value, ast.Tuple):

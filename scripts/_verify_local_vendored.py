@@ -1,3 +1,28 @@
+# =============================================================================
+# VENDORED FILE — DO NOT EDIT IN PLACE
+# =============================================================================
+# Source repo:  undercurrentai/aegis-governance (private, BSL-1.1)
+# Source path:  aegis-sdk/src/aegis/_verify_local.py
+# Source SHA:   37f86089b0583e91d76728d185e6947d8aa4f730 (main, 2026-05-09)
+# Source range: a5c0bfd..37f8608 (Sprint 4/D1 + D2 + audit)
+# Vendored on:  2026-05-09 (Sprint 5/E1 of cosmic-flute §26)
+#
+# Why vendored: aegis-governance>=0.5.0 is not on PyPI (latest published 0.4.1)
+# and the source repo is private. The parity gate (scripts/check_error_class_
+# parity.py) AST-walks this file to extract the SDK error_class taxonomy.
+#
+# Refresh procedure: copy the new _verify_local.py verbatim from upstream;
+# update the Source SHA above; bump policy/verifier-policy-v1.yaml policy_version
+# + add an entry to policy/CHANGELOG.md if the error_class taxonomy changed.
+# The error-class-parity.yml CI workflow will fail on the refresh PR until
+# the policy artifact catches up — that is the intended drift detection.
+#
+# Do NOT import this file as a runtime module. The runtime verifier ships in
+# aegis-governance/aegis-sdk/... and will be distributed via PyPI as
+# aegis-governance[verify] once v0.6.1+ is published. This vendored copy is
+# parse-only reference source for the parity check.
+# =============================================================================
+
 """Offline cryptographic verification of AEGIS attestation envelopes (Sprint 4 / D2).
 
 Pure crypto — NO HTTP. Consumers pin public keys at SDK init; verification runs

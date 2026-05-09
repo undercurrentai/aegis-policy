@@ -11,7 +11,11 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write  # for posting decision_id comment
+  # Note: previous version included `pull-requests: write` for "posting
+  # decision_id comment", but the workflow only writes to GITHUB_STEP_SUMMARY
+  # (Actions UI summary), NOT to PR comments. Least-privilege: dropped.
+  # If a future iteration adds an actions/github-script step that posts a
+  # PR comment, restore `pull-requests: write` then.
 
 jobs:
   shadow-eval:
