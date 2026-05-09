@@ -1,0 +1,78 @@
+name: AEGIS Shadow Evaluation
+
+# Self-dogfood: every PR to this repo invokes AEGIS Stage-2 evaluation.
+# Advisory only — never blocks. Posts decision_id as a PR comment for audit.
+# Mirrors the aegis-governance/.github/workflows/python-ci.yml shadow-eval pattern.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write  # for posting decision_id comment
+
+jobs:
+  shadow-eval:
+    name: AEGIS Shadow Evaluation (advisory)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    continue-on-error: true  # advisory; never blocks merge
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}  # skip on forks (no secret access)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Install minimal deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install httpx
+
+      - name: Submit AEGIS Stage-2 evaluation
+        env:
+          AEGIS_API_KEY: ${{ secrets.AEGIS_API_KEY }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python <<'PY'
+          import os, sys, httpx, json
+          api_key = os.environ.get("AEGIS_API_KEY", "").strip()
+          if not api_key:
+              print("WARN: AEGIS_API_KEY not configured; skipping shadow-eval")
+              sys.exit(0)
+          payload = {
+              "proposal_summary": f"PR #{os.environ['PR_NUM']}: {os.environ['PR_TITLE']}",
+              "estimated_impact": "low",  # aegis-policy is governance-only; consumer impact via SHA-pin
+              "risk_baseline": 0.05,
+              "risk_proposed": 0.05,
+          }
+          try:
+              r = httpx.post(
+                  "https://aegis-api-980022636831.us-central1.run.app/evaluate",
+                  json=payload,
+                  headers={"Authorization": f"Bearer {api_key}"},
+                  timeout=30.0,
+              )
+              r.raise_for_status()
+              data = r.json()
+              decision_id = data.get("decision_id", "<missing>")
+              status = data.get("status", "<unknown>")
+              print(f"AEGIS decision_id={decision_id} status={status}")
+              # Write to GH step summary for PR comment integration
+              gh_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if gh_summary:
+                  with open(gh_summary, "a") as f:
+                      f.write(f"## AEGIS Shadow Evaluation\n\n- **Status**: `{status}`\n- **Decision ID**: `{decision_id}`\n")
+          except Exception as e:
+              print(f"WARN: AEGIS shadow-eval call failed: {e}")
+              sys.exit(0)
+          PY

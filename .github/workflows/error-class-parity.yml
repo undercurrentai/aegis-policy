@@ -1,0 +1,65 @@
+name: Error-class Parity
+
+# Cross-checks `policy/verifier-policy-v1.yaml fail_closed_on` against the latest
+# `aegis-governance[verify]` SDK's emitted error_class set. Fails the PR if either
+# side has a member the other lacks.
+#
+# Closes the manual-audit gap from cosmic-flute §26.11 step 4. Without this
+# automation, drift between SDK error_class taxonomy and policy fail_closed_on
+# could silently propagate to all 19 consumer repos.
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "policy/verifier-policy-v1.yaml"
+      - "scripts/check_error_class_parity.py"
+      - ".github/workflows/error-class-parity.yml"
+      - "requirements-dev.txt"
+  push:
+    branches:
+      - main
+    paths:
+      - "policy/verifier-policy-v1.yaml"
+      - "scripts/check_error_class_parity.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: SDK ↔ policy error_class parity
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Install liboqs system library (for [verify] extra import)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y liboqs-dev || (
+            sudo apt-get install -y cmake ninja-build &&
+            git clone --depth 1 --branch 0.14.0 https://github.com/open-quantum-safe/liboqs.git &&
+            cd liboqs &&
+            mkdir build && cd build &&
+            cmake -GNinja -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON .. &&
+            ninja &&
+            sudo ninja install &&
+            sudo ldconfig
+          )
+          echo "LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+
+      - name: Install dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run parity check
+        run: python scripts/check_error_class_parity.py

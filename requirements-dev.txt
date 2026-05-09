@@ -1,0 +1,12 @@
+# Dev dependencies for CI workflows. Production verifier kit (Sprint 5/E2)
+# will pull in heavier deps via the composite Action's own setup; this file
+# is for the lint + parity workflows in .github/workflows/.
+
+# Error-class parity check (scripts/check_error_class_parity.py) needs the
+# SDK installed so we can introspect its emitted error_class taxonomy.
+# Pin to >=0.6.1 to match the post-Sprint-4/D2-audit SDK; the parity gate
+# will catch any drift the next time we bump.
+aegis-governance[verify]>=0.6.1,<0.7.0
+
+# YAML parsing for the parity check + lint workflow's parse-smoke loop.
+PyYAML>=6.0
