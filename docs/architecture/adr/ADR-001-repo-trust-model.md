@@ -2,7 +2,7 @@
 
 ## Status
 
-**Accepted** | 2026-05-09
+**Proposed** | 2026-05-09 (flips to **Accepted** on bootstrap PR #1 admin-merge to main)
 
 ## Context
 
