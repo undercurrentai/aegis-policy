@@ -4,7 +4,7 @@ Sprint 5 / E1-E3 + Sprint 6 / F1-F2 + Sprint 7 / G1-G3 of the rigor-aegis-attest
 
 | Phase | Status | Description | Tracking |
 |---|---|---|---|
-| **Sprint 5 / E1** | 🟡 in-flight (PR #1) | Repo bootstrap + governance scaffolding + contract vendoring + canonical verifier-policy `v1.0.0` (placeholder keys). Status flips to ✅ shipped on admin-merge to main. | PR #1 / this branch |
+| **Sprint 5 / E1** | ✅ shipped 2026-05-09 (commit `9c25b38`) | Repo bootstrap + governance scaffolding + contract vendoring + canonical verifier-policy `v1.0.0` (placeholder keys) | PR #1 (squash-merged via admin) |
 | **Sprint 5 / E1.5** | ☐ planned | Real Ed25519 + ML-DSA-44 keypair generation ceremony + GCP KMS aliases (`aegis-attestation-ed25519`, `aegis-attestation-mldsa44`) + server-side `attestation_keys.py:155 NotImplementedError` removal + commit `keys/ed25519-public.pem` + `keys/mldsa44-public.bin` + fill in `policy/verifier-policy-v1.yaml required_keyids` + bump `policy_version`. **Requires Josh-explicit-✅ AEGIS-self-tune-class gate per cosmic-flute §5.** Org-level GitHub Ruleset configuration (admin-level, out-of-repo). | Separate plan + PR (AEGIS-self-tune class) |
 | **Sprint 5 / E2** | ☐ planned | Composite GitHub Action `verify-aegis-attestation` (`actions/verify-aegis-attestation/action.yml`). Wraps `aegis-sdk[verify]` + key-fingerprint pinning + cosign-signed kit container release `ghcr.io/undercurrentai/aegis-policy`. | Separate plan + PR |
 | **Sprint 5 / E3** | ☐ planned | Reusable workflow `.github/workflows/aegis-verify-attestation.yml` (`workflow_call` trigger). Job-level orchestration consumed by all 19 portfolio consumer repos. Resolves the `verifier_policy_artifact` reference at `schema/attestation_predicate_v1.yaml:128`. | Separate plan + PR |

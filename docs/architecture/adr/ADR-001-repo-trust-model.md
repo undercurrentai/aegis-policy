@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed** | 2026-05-09 (flips to **Accepted** on bootstrap PR #1 admin-merge to main)
+**Accepted** | 2026-05-09 (bootstrap PR #1 admin-squash-merged to main as commit `9c25b38`)
 
 ## Context
 
