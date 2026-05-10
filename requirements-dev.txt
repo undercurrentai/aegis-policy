@@ -1,0 +1,11 @@
+# Dev dependencies for the parity-check script + lint workflow.
+#
+# Note: aegis-governance>=0.6.1 is NOT on PyPI yet (latest published: 0.4.1)
+# and the source repo is private (BSL-1.1). Rather than carrying a PAT secret
+# + Git-installer in CI, we vendor `aegis-sdk/src/aegis/_verify_local.py` into
+# `scripts/_verify_local_vendored.py` and AST-walk it for parity checking.
+# See `scripts/check_error_class_parity.py` module docstring + the vendored
+# file's header for refresh procedure.
+
+# YAML parsing for the parity check + lint workflow's parse-smoke loop.
+PyYAML>=6.0

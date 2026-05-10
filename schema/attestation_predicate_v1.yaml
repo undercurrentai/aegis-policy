@@ -1,0 +1,129 @@
+# AEGIS Attestation Predicate Schema v1
+# Authoritative schema for the AEGIS-native attestation predicate body,
+# wrapped inside an in-toto Statement v1 with predicateType:
+#   https://aegis.undercurrentholdings.com/attestation/v1
+#
+# Version: 1.0.0
+# Freeze Tag: aegis-attestation-predicate-v1-freeze
+# Crypto: Ed25519 + ML-DSA-44 hybrid per ADR-003 + ADR-011
+# Envelope: DSSE v1 with payloadType: application/vnd.in-toto+json
+
+version: "1.0.0"
+freeze_tag: "aegis-attestation-predicate-v1-freeze"
+predicate_type_uri: "https://aegis.undercurrentholdings.com/attestation/v1"
+
+# =============================================================================
+# in-toto Statement v1 — required top-level fields
+# Source: https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md
+# =============================================================================
+
+statement_required:
+  - _type             # literal "https://in-toto.io/Statement/v1"
+  - subject           # array of {name?, digest{algorithm: hex_value}}
+  - predicateType     # this schema's predicate_type_uri
+  - predicate         # the body schema below
+
+# =============================================================================
+# Predicate body — SLSA-v1.0-shaped + AEGIS governance namespace
+# Source: https://slsa.dev/provenance/v1 (buildDefinition + runDetails patterns)
+# =============================================================================
+
+predicate_schema:
+  buildDefinition:
+    required:
+      - buildType            # e.g., "https://aegis.undercurrentholdings.com/buildtype/v1"
+      - externalParameters   # CI inputs: repo, ref, sha, ci_run_id
+    optional:
+      - internalParameters
+      - resolvedDependencies
+
+  runDetails:
+    required:
+      - builder              # {id, version?}
+    optional:
+      - metadata             # {invocationId, startedOn, finishedOn}
+      - byproducts
+
+  governance:                # AEGIS-specific extension (not in SLSA v1.0)
+    required:
+      - decision_id          # AEGIS decision UUID
+      - artifact_digest      # canonical sha256 of artifact under attest
+      - environment          # "production" | "staging" | "preview"
+      - risk_class           # "low" | "medium" | "high" | "critical"
+      - policy_version       # AEGIS policy semver
+      - issued_at            # ISO 8601 UTC
+      - expires_at           # ISO 8601 UTC; TTL policy-controlled per risk_class (see interface-contract.yaml attestation.ttl)
+      - nonce                # 256-bit random; required for risk_class in {high, critical}
+      - gate_pass_states     # {risk, profit, novelty, complexity, quality, utility}
+                             #   each: "pass" | "fail" | "skipped"
+      # Context bindings (mandatory verifier checks — prevent cross-context replay).
+      # Per ADR-011 r2 (cross-model dialogue 2026-05-08).
+      # Canonical 6-field set = the four added below + `environment` (already
+      # required at index 2 above) + `subject_digest` (sourced from in-toto
+      # Statement.subject[0].digest.sha256, NOT a predicate-body field). See
+      # `schema/interface-contract.yaml` `attestation.context_bindings_required`
+      # for the single source of truth on the full 6-field set.
+      - repository           # e.g., "undercurrentai/aegis-governance"
+      - workflow_ref         # e.g., ".github/workflows/aegis-deploy.yml@refs/heads/main"
+      - run_id               # CI run identifier
+      - run_attempt          # CI run attempt number (re-runs)
+
+# =============================================================================
+# DSSE Envelope — output structure
+# Source: https://github.com/secure-systems-lab/dsse/blob/master/protocol.md
+# =============================================================================
+
+envelope_schema:
+  # ADR-011 r1 (cross-model dialogue 2026-05-08): replace concatenated-signature
+  # representation with native DSSE multi-`signatures[]` entries.
+  # AND-of-2 is enforced by VERIFIER POLICY (see references.verifier_policy_artifact),
+  # NOT by DSSE structure (DSSE accepts a single valid signature as success).
+  payload_type: "application/vnd.in-toto+json"
+  payload_encoding: "base64(canonical_json(Statement))"
+  signature_representation: "dsse_multi_signatures"  # NOT concat
+  signatures_required: 2
+  required_signature_set:
+    - keyid_prefix: "ed25519:"
+      algorithm: "ed25519"
+    - keyid_prefix: "ml-dsa-44:"
+      algorithm: "ml-dsa-44"
+  pae_format: "DSSEv1 <len(type)> <type> <len(body)> <body>"
+  verification_rule: "BOTH signatures must verify (logical AND, enforced by verifier policy artifact, per ADR-003 §3 + ADR-011 §Verifier Policy Requirements)"
+
+# =============================================================================
+# Verification semantics — fail-closed conditions
+# Sprint 3 /attestations/verify endpoint + Sprint 5 verifier kit enforce
+# Per ADR-011 r1+r2+r7 (cross-model dialogue 2026-05-08)
+# =============================================================================
+
+verification:
+  fail_closed_on:
+    - signature_set_incomplete   # < 2 signatures present in DSSE envelope
+    - unknown_algorithm          # signature carries algorithm not in required_signature_set
+    - signature_mismatch         # Either Ed25519 or ML-DSA-44 fails to verify
+    - different_payload          # signatures cover different payloads (defense against tooling bug)
+    - expired                    # now() > expires_at
+    - environment_mismatch       # attestation.environment != deploy_target.environment
+    - artifact_digest_mismatch   # attestation.subject.digest != deploy_artifact.digest
+    - nonce_replay               # nonce already consumed (high/critical risk_class only)
+    - context_binding_mismatch   # repository / workflow_ref / run_id / run_attempt mismatch
+
+# =============================================================================
+# References
+# =============================================================================
+
+references:
+  adr: "docs/architecture/adr/ADR-011-artifact-bound-aegis-attestations.md"
+  in_toto_statement: "https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md"
+  slsa_provenance: "https://slsa.dev/provenance/v1"
+  dsse_protocol: "https://github.com/secure-systems-lab/dsse/blob/master/protocol.md"
+  composite_sig_precedent: "https://datatracker.ietf.org/doc/html/draft-miller-sshm-mldsa65-ed25519-composite-sigs-00"
+  rfc_8785_canonicalization: "https://www.rfc-editor.org/rfc/rfc8785"
+  fips_204_ml_dsa: "https://csrc.nist.gov/pubs/fips/204/final"
+  crypto_provider: "src/crypto/hybrid_provider.py"
+  canonicalization_pattern: "src/crypto/schema_signer.py"
+  # Cross-model dialogue synthesis (drove r1-r8 revisions to v1 contract)
+  dialogue_synthesis_2026_05_08: "~/.claude/dialogue-results/adr-011-review-2026-05-08.md"
+  # Future deliverables (Sprint 5)
+  verifier_policy_artifact: "undercurrentai/aegis-policy:.github/workflows/aegis-verify-attestation.yml (TBD; pinned by SHA from each consumer repo)"
+  verifier_kit_action: "undercurrentai/aegis-policy:actions/verify-aegis-attestation/action.yml (TBD; pinned by SHA)"

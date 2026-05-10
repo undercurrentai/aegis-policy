@@ -1,0 +1,121 @@
+# =============================================================================
+# Attestation Governance — extracted from aegis-governance/schema/interface-contract.yaml
+# (lines 138-251 of the v1.2.0 release at commit a5c0bfd)
+#
+# Extracted verbatim. The parent `interface-contract.yaml` also contains
+# `parameters:` and `aliases:` blocks (frozen risk/profit/etc gate values + alias
+# mappings) — those are NOT relevant to verifier kit consumers and are omitted.
+# This file is self-contained: consumers don't need to clone aegis-governance.
+#
+# Source: aegis-governance@a5c0bfd6379f85d506ff47656aa4ee4ec5eb56a4
+# Refresh procedure: see schema/PROVENANCE.md
+# =============================================================================
+
+attestation:
+  predicate_schema_path: "schema/attestation_predicate_v1.yaml"
+  predicate_type_uri: "https://aegis.undercurrentholdings.com/attestation/v1"
+  predicate_version: "1.0.0"
+
+  envelope:
+    # ADR-011 r1 (cross-model dialogue 2026-05-08): DSSE multi-`signatures[]`
+    # representation. AND-of-2 enforced by VERIFIER POLICY, not DSSE.
+    type: "DSSE"
+    payload_type: "application/vnd.in-toto+json"
+    signature_representation: "dsse_multi_signatures"
+    signatures_required: 2
+    required_algorithms:
+      - "ed25519"
+      - "ml-dsa-44"
+
+  # Verifier policy artifact (Sprint 5 / E1) — machine-readable policy that the
+  # pinned verifier kit (Sprint 5 / E2) consumes. AND-of-2, required keyids,
+  # required context bindings, fail-closed conditions. Distributed via
+  # undercurrentai/aegis-policy@<sha-pinned> from each consumer repo.
+  # Per ADR-011 r7 (cross-model dialogue 2026-05-08).
+  verifier_policy:
+    repo: "undercurrentai/aegis-policy"
+    workflow_path: ".github/workflows/aegis-verify-attestation.yml"
+    pin_strategy: "immutable_sha"  # consumer repos pin by SHA, never by ref
+    enforces:
+      - "required_algorithms"
+      - "required_keyids"
+      - "required_context_bindings"
+      - "fail_closed_conditions"
+      - "ttl_per_risk_class"
+      - "nonce_required_for_risk_classes"
+      # Per ADR-011 §Sprint-2-implementation-notes N3 — verifier MUST
+      # check governance.policy_version against consumer's pinned policy_version.
+      # v1 default: strict-equal (fail-closed on any mismatch).
+      - "policy_version_compatibility"
+
+  # Pinned verifier kit (Sprint 5 / E2) — single containerized GitHub Action
+  # consumed by all 19 consumer repos. Prevents per-repo liboqs/verifier drift.
+  # Per ADR-011 r8 (cross-model dialogue 2026-05-08) — mandatory, not optional.
+  verifier_kit:
+    repo: "undercurrentai/aegis-policy"
+    action_path: "actions/verify-aegis-attestation/action.yml"
+    pin_strategy: "immutable_sha"
+    ships:
+      - "liboqs"
+      - "liboqs-python"
+      - "rfc8785_canonicalization"
+      - "verifier_binary"
+
+  # TTL — policy-controlled per risk_class. Defaults must be derived from
+  # measured P99 pipeline duration + approval SLA + safety margin (revisited
+  # quarterly). Re-attestation for same artifact_digest with new nonce + new
+  # expires_at is permitted. Per ADR-011 r3 (cross-model dialogue 2026-05-08).
+  ttl:
+    policy_controlled: true
+    defaults_owner: "verifier_policy artifact in undercurrentai/aegis-policy"
+    review_cadence: "quarterly"
+    re_attestation_allowed: true
+    initial_defaults_hours:   # NON-canonical guidance only; canonical values live in
+      # the aegis-policy verifier_policy artifact (Sprint 5 / E1) and are revisited
+      # quarterly against measured P99 pipeline duration + approval SLA. Per dialogue
+      # r3 (2026-05-08): TTL must NOT be a fixed contract value.
+      low: 24
+      medium: 24
+      high: 4
+      critical: 4
+    max_ttl_hours: 24
+
+  nonce_required_for_risk_classes:
+    - high
+    - critical
+
+  # Mandatory verifier checks for replay/cross-context defense. Mismatch =
+  # hard fail. Per ADR-011 r2 (cross-model dialogue 2026-05-08).
+  context_bindings_required:
+    - repository
+    - workflow_ref
+    - run_id
+    - run_attempt
+    - subject_digest
+    - environment
+
+  fail_closed:
+    on_signature_set_incomplete: true   # < 2 signatures present
+    on_unknown_algorithm: true          # alg not in required_algorithms
+    on_signature_mismatch: true
+    on_different_payload: true          # signatures cover different payloads
+    on_expiry: true
+    on_environment_mismatch: true
+    on_artifact_digest_mismatch: true
+    on_nonce_replay: true
+    on_context_binding_mismatch: true
+
+  # v1 security property: ALGORITHM DIVERSITY (one-algorithm break does not
+  # yield forgery, provided keys remain secret). v1 does NOT deliver
+  # COMPROMISE-DOMAIN SEPARATION (single CI runner with both keys = single
+  # compromise vector). See ADR-011 §"Security property" for honest framing.
+  # Future opt-in "isolated_signing_profile" (out of Sprints 1-7 scope) would
+  # require disjoint IAM principals + HSM split.
+  # Per ADR-011 r4 (cross-model dialogue 2026-05-08).
+  security_property_v1: "algorithm_diversity"  # NOT "compromise_domain_separation"
+
+  references:
+    adr: "docs/architecture/adr/ADR-011-artifact-bound-aegis-attestations.md"
+    crypto_provider: "src/crypto/hybrid_provider.py"
+    schema_signer: "src/crypto/schema_signer.py"
+    dialogue_synthesis_2026_05_08: "~/.claude/dialogue-results/adr-011-review-2026-05-08.md"

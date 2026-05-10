@@ -1,0 +1,50 @@
+name: Lint
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  markdown:
+    name: Markdown lint
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@db43aef879112c3119a410d69f66701e0d530809 # v17
+        with:
+          globs: |
+            **/*.md
+            !LICENSE
+
+  yaml:
+    name: YAML lint + parse
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.13"
+      - name: Install yamllint + PyYAML
+        run: |
+          python -m pip install --upgrade pip
+          pip install yamllint pyyaml
+      - name: Run yamllint
+        run: yamllint -d relaxed schema/ policy/ .github/
+      - name: Parse-smoke each YAML
+        run: |
+          set -euo pipefail
+          for f in schema/*.yaml policy/*.yaml .github/dependabot.yml .github/workflows/*.yml; do
+            python -c "import yaml,sys; yaml.safe_load(open('$f')); print('OK', '$f')"
+          done
