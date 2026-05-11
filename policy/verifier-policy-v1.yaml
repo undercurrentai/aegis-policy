@@ -38,12 +38,20 @@ crypto:
 # Pinned canonical public-key fingerprints (PLACEHOLDERS until E1.5 ceremony)
 # ─────────────────────────────────────────────────────────────────────────────
 required_keyids:
-  ed25519: "PLACEHOLDER_E1_5_CEREMONY_PENDING"  # SHA-256 fingerprint of canonical Ed25519 public key (replaced in C4)
-  mldsa65: "PLACEHOLDER_E1_5_CEREMONY_PENDING"  # SHA-256 fingerprint of canonical ML-DSA-65 public key (replaced in C4)
-# Real fingerprints land in C4 of this PR after the public-key bytes are committed
-# in C3. The fingerprint-parity gate (scripts/check_fingerprints.py + .github/
-# workflows/fingerprint-parity.yml; added in C5) enforces bytes ↔ fingerprints
-# invariant on every subsequent PR touching keys/ or policy/verifier-policy-v1.yaml.
+  # SHA-256 hex (lowercase, 64 chars) computed over RAW key bytes (not PEM).
+  # For Ed25519: SHA-256 over the 32B raw extracted from keys/ed25519-public.pem
+  #              via cryptography.serialization.load_pem_public_key().public_bytes(
+  #              Encoding.Raw, PublicFormat.Raw).
+  # For ML-DSA-65: SHA-256 directly over the 1952B raw in keys/mldsa65-public.bin
+  #                (the file IS the raw; extraction from the X.509 PEM lives in
+  #                scripts/extract_mldsa65_raw.py for future rotations).
+  # Ceremony captured 2026-05-10 from GCP KMS keyring `aegis-attestation` in
+  # `undercurrent-production`, us-central1, version 1 of each key. See ADR-002.
+  ed25519: "33378f58b12a92488fd57888323b77fef2ffd9bd051c10768fc770c02025d97d"
+  mldsa65: "f4e65bb77a508e82cd60b576075866d3e6447f4d3fd841ef1c3f1b93ecbe7d93"
+# The fingerprint-parity gate (scripts/check_fingerprints.py +
+# .github/workflows/fingerprint-parity.yml; added in C5) enforces the bytes ↔
+# fingerprints invariant on every subsequent PR touching keys/ or this file.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Required predicate-binding fields (per ADR-011 §Decision + §lines 217-231)
