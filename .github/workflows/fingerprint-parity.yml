@@ -1,0 +1,64 @@
+name: Fingerprint Parity
+
+# Cross-checks `policy/verifier-policy-v1.yaml required_keyids` against the
+# SHA-256 of the bytes in `keys/`. Fails the PR if either side drifts from
+# the other. This is the trust-spine-integrity gate: prevents the
+# "single-char fingerprint typo causes live deploy outage" failure mode
+# (cosmic-flute §28.5 box 7 + §30 §3.1).
+#
+# Counterpart of error-class-parity.yml. Sprint 5/E1.5 Phase 5 C5.
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "policy/verifier-policy-v1.yaml"
+      - "keys/**"
+      - "scripts/check_fingerprints.py"
+      - ".github/workflows/fingerprint-parity.yml"
+      - "requirements-dev.txt"
+  push:
+    branches:
+      - main
+    # Mirror the pull_request paths exactly. Asymmetry between PR and push
+    # triggers is a common CI antipattern: if a workflow-file or deps-file
+    # change ever lands on main without a PR (admin merge / direct push),
+    # the gate must still re-run for the change to be visible in CI history.
+    paths:
+      - "policy/verifier-policy-v1.yaml"
+      - "keys/**"
+      - "scripts/check_fingerprints.py"
+      - ".github/workflows/fingerprint-parity.yml"
+      - "requirements-dev.txt"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: keys/ ↔ required_keyids SHA-256 parity
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dev deps
+        # Needs `cryptography` for Ed25519 PEM → raw 32B extraction, plus
+        # `pyyaml` to load policy/verifier-policy-v1.yaml. ML-DSA-65 bytes
+        # are already raw on disk (keys/mldsa65-public.bin) — no extraction
+        # at gate time. The X.509 ASN.1 extraction utility
+        # (scripts/extract_mldsa65_raw.py) is for key-rotation operators,
+        # not the parity gate.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run fingerprint-parity check
+        run: python scripts/check_fingerprints.py

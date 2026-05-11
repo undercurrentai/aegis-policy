@@ -3,61 +3,28 @@
 # =============================================================================
 # Source repo:  undercurrentai/aegis-governance (private, BSL-1.1)
 # Source path:  aegis-sdk/src/aegis/_verify_local.py
-# Source SHA:   37f86089b0583e91d76728d185e6947d8aa4f730 (main, 2026-05-09)
-# Source range: a5c0bfd..37f8608 (Sprint 4/D1 + D2 + audit)
-# Vendored on:  2026-05-09 (Sprint 5/E1 of cosmic-flute §26)
+# Source SHA:   7e422b2 (main, 2026-05-10; post Sprint 5/E1.5 Phase 4 + audit)
+# Source range: 37f8608..7e422b2 (Sprint 5/E1.5: ML-DSA-65 migration + ADR-012)
+# Vendored on:  2026-05-10 (Sprint 5/E1.5 Phase 5 of cosmic-flute §30)
 #
-# Why vendored: aegis-governance>=0.5.0 is not on PyPI (latest published 0.4.1)
-# and the source repo is private. The parity gate (scripts/check_error_class_
-# parity.py) AST-walks this file to extract the SDK error_class taxonomy.
+# Why vendored: aegis-governance is private (BSL-1.1) + aegis-sdk 1.0.0 not yet
+# on PyPI (per AU-N-1 follow-up). The parity gate (scripts/check_error_class_
+# parity.py) AST-walks this file to extract the SDK error_class taxonomy; the
+# new fingerprint-parity gate (scripts/check_fingerprints.py) verifies the
+# vendored verifier expects the same algorithm + sizes that policy/verifier-
+# policy-v1.yaml declares.
 #
 # Refresh procedure: copy the new _verify_local.py verbatim from upstream;
 # update the Source SHA above; bump policy/verifier-policy-v1.yaml policy_version
-# + add an entry to policy/CHANGELOG.md if the error_class taxonomy changed.
-# The error-class-parity.yml CI workflow will fail on the refresh PR until
+# + add an entry to policy/CHANGELOG.md if error_class taxonomy OR algorithm
+# changed. The error-class-parity.yml CI workflow fails on the refresh PR until
 # the policy artifact catches up — that is the intended drift detection.
 #
 # Do NOT import this file as a runtime module. The runtime verifier ships in
 # aegis-governance/aegis-sdk/... and will be distributed via PyPI as
-# aegis-governance[verify] once v0.6.1+ is published. This vendored copy is
-# parse-only reference source for the parity check.
+# aegis-governance[verify] once 1.0.0 is published. This vendored copy is
+# parse-only reference source for the parity gates.
 # =============================================================================
-
-"""Offline cryptographic verification of AEGIS attestation envelopes (Sprint 4 / D2).
-
-Pure crypto — NO HTTP. Consumers pin public keys at SDK init; verification runs
-entirely locally. Mirrors server-side ``AttestationProvider.verify()`` byte-for-byte
-to guarantee identical cryptographic outcomes between offline + server verification.
-
-Available only when the ``[verify]`` extra is installed::
-
-    pip install aegis-governance[verify]
-
-Adds runtime deps: ``cryptography``, ``liboqs-python``, ``rfc8785``.
-
-Usage::
-
-    from aegis import verify_attestation_locally, AttestationVerifyKey
-
-    keys = AttestationVerifyKey(
-        ed25519_public=b"...32 bytes...",
-        mldsa44_public=b"...1312 bytes...",
-    )
-
-    valid, error_class = verify_attestation_locally(
-        envelope=envelope,
-        expected_digest="<sha256 lowercase hex 64>",
-        expected_environment="production",
-        keys=keys,
-    )
-    if not valid:
-        raise RuntimeError(f"local verification failed: {error_class}")
-
-The error_class strings emitted exactly match the server-side
-``AttestationProvider.verify()`` strings, so consumer code can check
-``error_class`` identically across HTTP-verify (D1) and offline-verify (D2).
-"""
-
 from __future__ import annotations
 
 import base64
@@ -80,9 +47,9 @@ from aegis.types import DSSEEnvelope, InTotoStatement
 CONTEXT_STRING: bytes = b"aegis-attestation-v1"
 PAYLOAD_TYPE: str = "application/vnd.in-toto+json"
 ED25519_KEYID_PREFIX: str = "ed25519:"
-MLDSA_KEYID_PREFIX: str = "ml-dsa-44:"
+MLDSA_KEYID_PREFIX: str = "ml-dsa-65:"
 ED25519_PUBLIC_LEN: int = 32
-MLDSA44_PUBLIC_LEN: int = 1312
+MLDSA65_PUBLIC_LEN: int = 1952
 
 
 @dataclass(frozen=True)
@@ -95,23 +62,23 @@ class AttestationVerifyKey:
 
     Args:
         ed25519_public: Raw 32-byte Ed25519 public key.
-        mldsa44_public: Raw 1312-byte ML-DSA-44 public key.
+        mldsa65_public: Raw 1952-byte ML-DSA-65 public key.
 
     Raises:
         ValueError: if either key length doesn't match the expected size.
     """
 
     ed25519_public: bytes
-    mldsa44_public: bytes
+    mldsa65_public: bytes
 
     def __post_init__(self) -> None:
         if len(self.ed25519_public) != ED25519_PUBLIC_LEN:
             raise ValueError(
                 f"ed25519_public must be {ED25519_PUBLIC_LEN} bytes, got {len(self.ed25519_public)}"
             )
-        if len(self.mldsa44_public) != MLDSA44_PUBLIC_LEN:
+        if len(self.mldsa65_public) != MLDSA65_PUBLIC_LEN:
             raise ValueError(
-                f"mldsa44_public must be {MLDSA44_PUBLIC_LEN} bytes, got {len(self.mldsa44_public)}"
+                f"mldsa65_public must be {MLDSA65_PUBLIC_LEN} bytes, got {len(self.mldsa65_public)}"
             )
 
 
@@ -166,13 +133,13 @@ def _canonical_statement_bytes(statement_dict: dict[str, Any]) -> bytes:
     return rfc8785.dumps(normalized)
 
 
-# ── Ed25519 + ML-DSA-44 verify (must match server attestation_provider.py) ──
+# ── Ed25519 + ML-DSA-65 verify (must match server attestation_provider.py) ──
 
 
 def _verify_ed25519_with_context(signature: bytes, pae: bytes, public_key_bytes: bytes) -> bool:
     """Hash-and-sign with context: ``H(CONTEXT_STRING || PAE)`` → Ed25519 verify.
 
-    Ed25519 doesn't natively support context strings (unlike ML-DSA-44 per
+    Ed25519 doesn't natively support context strings (unlike ML-DSA-65 per
     FIPS 204). Server-side ``attestation_provider.py:124,205-209`` uses
     ``hashlib.sha256(CONTEXT_STRING + pae).digest()`` as the message — SDK
     mirrors exactly. Returns False on any verification failure (caller handles
@@ -187,16 +154,30 @@ def _verify_ed25519_with_context(signature: bytes, pae: bytes, public_key_bytes:
         return False
 
 
-def _verify_mldsa44_with_context(signature: bytes, pae: bytes, public_key_bytes: bytes) -> bool:
-    """ML-DSA-44 verify with FIPS 204 final ctx-string API.
+def _verify_mldsa65_with_context(signature: bytes, pae: bytes, public_key_bytes: bytes) -> bool:
+    """ML-DSA-65 verify with uniform prefix-hash-and-sign per ADR-012.
 
-    Calls liboqs-python's ``Signature.verify_with_ctx_str(message, signature,
-    context, public_key)`` — introduced in liboqs-python 0.12.0 per FIPS 204
-    Algorithms 2 & 3. Returns False on any verification failure.
+    **Wire-format change in Sprint 5/E1.5 per ADR-012 §"Context-string handling"**:
+    pre-ADR-012 this called ``Signature.verify_with_ctx_str(message, signature,
+    context, public_key)`` using the FIPS 204 native ctx-string API. Post-ADR-012
+    the server-side ``KMSAttestationSigner`` cannot use FIPS 204 ctx-string (GCP
+    KMS API does not expose a ``context`` field), so both sides shifted to uniform
+    prefix-hash-and-sign: caller pre-hashes ``msg' = SHA-256(CONTEXT_STRING ‖ PAE)``
+    and ``Signature.verify(msg', sig, pk)`` is called with the 32-byte digest.
+
+    Cryptographically equivalent to FIPS 204 ctx-string mode with empty default
+    ctx under random-oracle assumption. Empirically verified 2026-05-10 via Phase
+    4a smoke probe (both gcloud CLI and google-cloud-kms 3.13.0 Python client
+    transports produced 3,309-byte signatures that verify True under this scheme).
+
+    Returns False on any verification failure for fail-closed semantics.
     """
     try:
-        with oqs.Signature("ML-DSA-44") as sig:
-            return bool(sig.verify_with_ctx_str(pae, signature, CONTEXT_STRING, public_key_bytes))
+        # Uniform prefix-hash-and-sign per ADR-012 — mirrors server-side
+        # KMSAttestationSigner which signs SHA-256(CONTEXT_STRING || PAE).
+        msg = hashlib.sha256(CONTEXT_STRING + pae).digest()
+        with oqs.Signature("ML-DSA-65") as sig:
+            return bool(sig.verify(msg, signature, public_key_bytes))
     except Exception:
         # liboqs may raise RuntimeError on internal errors (corrupt key, etc.);
         # treat all such failures as verification-failed for fail-closed semantics.
@@ -218,7 +199,7 @@ def verify_attestation_locally(
 
     Mirrors server-side ``AttestationProvider.verify()`` byte-for-byte. Performs
     in order: envelope shape check, payload base64 decode, RFC 8785 re-canonicalization
-    (catches tampering), Ed25519 verify (AND-of-2 first half), ML-DSA-44 verify
+    (catches tampering), Ed25519 verify (AND-of-2 first half), ML-DSA-65 verify
     (AND-of-2 second half), subject digest check, environment check, expiry check.
 
     Returns ``(True, None)`` on success; ``(False, error_class)`` on any failure.
@@ -232,7 +213,7 @@ def verify_attestation_locally(
             attest. Compared against the envelope's ``subject[0].digest["sha256"]``.
         expected_environment: One of ``"production" | "staging" | "preview"``.
             Compared against the envelope's ``predicate.governance.environment``.
-        keys: Pinned :class:`AttestationVerifyKey` providing the Ed25519 + ML-DSA-44
+        keys: Pinned :class:`AttestationVerifyKey` providing the Ed25519 + ML-DSA-65
             public keys. Consumers obtain these out-of-band (Sprint 5/E2
             verifier-kit, or project KMS/config).
         now: Optional reference time for expiry comparison. Defaults to
@@ -305,12 +286,12 @@ def verify_attestation_locally(
     if not _verify_ed25519_with_context(ed_sig_bytes, pae, keys.ed25519_public):
         return (False, "AttestationEd25519VerifyFailed")
 
-    # 8. Verify ML-DSA-44 (second half of AND-of-2)
+    # 8. Verify ML-DSA-65 (second half of AND-of-2)
     try:
         ml_sig_bytes = base64.b64decode(ml_sig_entry.sig, validate=True)
     except Exception:
         return (False, "AttestationMLDSASigDecodeFailed")
-    if not _verify_mldsa44_with_context(ml_sig_bytes, pae, keys.mldsa44_public):
+    if not _verify_mldsa65_with_context(ml_sig_bytes, pae, keys.mldsa65_public):
         return (False, "AttestationMLDSAVerifyFailed")
 
     # 9. Subject digest check (lowercase-normalized per RFC 4122 + ADR-011 N1)
