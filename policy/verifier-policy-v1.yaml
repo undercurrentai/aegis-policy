@@ -7,40 +7,43 @@
 #
 # Derivation: see policy/PROVENANCE.md
 # Version tracking: see policy/CHANGELOG.md (independent of repo-level CHANGELOG)
-# Schema reference: schema/attestation_predicate_v1.yaml (vendored from aegis-governance@a5c0bfd)
+# Schema reference: schema/attestation_predicate_v1.yaml (vendored from aegis-governance@7e422b2)
 
-policy_version: "1.0.0"
+policy_version: "2.0.0"
 spec_uri: "https://aegis.undercurrentholdings.com/policy/verifier/v1"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Cryptographic requirements (per ADR-011 §Decision)
+# Cryptographic requirements (per ADR-011 §Decision + upstream ADR-012)
 # ─────────────────────────────────────────────────────────────────────────────
 crypto:
   required_algorithms:
     - "ed25519"
-    - "ml-dsa-44"
+    - "ml-dsa-65"
   verification_rule: "AND-of-2"        # both signatures MUST verify (fail-closed if either fails)
   context_string: "aegis-attestation-v1"  # 16 ASCII bytes; binds signatures to AEGIS-attestation purpose
   payload_type: "application/vnd.in-toto+json"
   ed25519_keyid_prefix: "ed25519:"
-  mldsa44_keyid_prefix: "ml-dsa-44:"
+  mldsa65_keyid_prefix: "ml-dsa-65:"
   ed25519_public_size_bytes: 32
-  mldsa44_public_size_bytes: 1312
-  # Ed25519 signature semantics: hash-and-sign with context per ADR-011 §22.13 dec 5
-  # (Ed25519 doesn't natively support context strings; SDK + server both compute
-  # H(CONTEXT_STRING || PAE) and sign that hash). ML-DSA-44 uses FIPS 204 final
-  # ctx-string API natively per ADR-011 N2.
-  ed25519_binding: "hash_and_sign"     # H(context || pae)
-  mldsa44_binding: "fips204_ctx_str"   # native ctx-string API per liboqs >=0.12.0
+  mldsa65_public_size_bytes: 1952
+  # Uniform prefix-hash-and-sign for BOTH algorithms per ADR-012 §"Context-string
+  # binding under KMS": GCP KMS asymmetric_sign API does NOT expose FIPS 204
+  # ctx-string parameter, so the verifier computes H(CONTEXT_STRING || PAE)
+  # and signs that 32-byte digest for both Ed25519 and ML-DSA-65. Empirically
+  # verified 2026-05-10 via Phase 4a smoke probe.
+  ed25519_binding: "hash_and_sign"     # H(context || pae); Ed25519 doesn't natively support ctx-strings
+  mldsa65_binding: "prefix_hash_sign"  # H(context || pae) → ML-DSA-65 plain sign (NOT verify_with_ctx_str per ADR-012)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pinned canonical public-key fingerprints (PLACEHOLDERS until E1.5 ceremony)
 # ─────────────────────────────────────────────────────────────────────────────
 required_keyids:
-  ed25519: "PLACEHOLDER_E1_5_CEREMONY_PENDING"  # SHA-256 fingerprint of canonical Ed25519 public key
-  mldsa44: "PLACEHOLDER_E1_5_CEREMONY_PENDING"  # SHA-256 fingerprint of canonical ML-DSA-44 public key
-# E1.5 ceremony: real fingerprints land in a separate gated PR with Josh-explicit-✅
-# AEGIS-self-tune-class gate per cosmic-flute §5. See docs/key-rotation-runbook.md.
+  ed25519: "PLACEHOLDER_E1_5_CEREMONY_PENDING"  # SHA-256 fingerprint of canonical Ed25519 public key (replaced in C4)
+  mldsa65: "PLACEHOLDER_E1_5_CEREMONY_PENDING"  # SHA-256 fingerprint of canonical ML-DSA-65 public key (replaced in C4)
+# Real fingerprints land in C4 of this PR after the public-key bytes are committed
+# in C3. The fingerprint-parity gate (scripts/check_fingerprints.py + .github/
+# workflows/fingerprint-parity.yml; added in C5) enforces bytes ↔ fingerprints
+# invariant on every subsequent PR touching keys/ or policy/verifier-policy-v1.yaml.
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Required predicate-binding fields (per ADR-011 §Decision + §lines 217-231)
