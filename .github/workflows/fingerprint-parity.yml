@@ -21,10 +21,16 @@ on:
   push:
     branches:
       - main
+    # Mirror the pull_request paths exactly. Asymmetry between PR and push
+    # triggers is a common CI antipattern: if a workflow-file or deps-file
+    # change ever lands on main without a PR (admin merge / direct push),
+    # the gate must still re-run for the change to be visible in CI history.
     paths:
       - "policy/verifier-policy-v1.yaml"
       - "keys/**"
       - "scripts/check_fingerprints.py"
+      - ".github/workflows/fingerprint-parity.yml"
+      - "requirements-dev.txt"
   workflow_dispatch:
 
 permissions:

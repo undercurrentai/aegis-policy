@@ -83,7 +83,7 @@ During Phase 1 execution, an experimental probe artifact `aegis-attestation-mlds
 | `versions destroy 1` scheduled | 2026-05-10 16:55 UTC → DESTROY_SCHEDULED |
 | GCP hard-destruction (30-day grace) | 2026-06-09T16:04:35Z (~ETA) |
 
-Pre-destroy safety audit (cosmic-flute §28.17): no IAM bindings scoped specifically to the `-sw` artifact; no public-key bytes published anywhere; no operational dependencies (DISABLED state precluded any signing operations). Hard-destruction verification is tracked as cosmic-flute task #65 (read-only check post-2026-06-09).
+Pre-destroy safety audit (cosmic-flute §28.17): no IAM bindings scoped specifically to the `-sw` artifact; no public-key bytes published anywhere; no operational dependencies (DISABLED state precluded any signing operations). Hard-destruction verification is tracked as cosmic-flute task #65 (read-only check post-2026-06-09); cosmic-flute §28.18.2 specifies the verification command (`gcloud kms keys versions describe 1 --key=aegis-attestation-mldsa65-sw …` expecting `state: DESTROYED`). The intermediate `~16:30 UTC` Disabled timestamp is approximate (sourced from operator session log, not GCP audit log directly); the canonical state-transition record per §28.17 is the single DISABLED → DESTROY_SCHEDULED transition at 16:55 UTC.
 
 ## Consequences
 

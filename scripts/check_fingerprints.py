@@ -91,6 +91,11 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    # Normalize expected values to lowercase + stripped (hashlib.hexdigest
+    # always returns lowercase). Catches case-mixed YAML edits without
+    # confusing "f4e6 vs F4E6" diagnostics.
+    expected_ed25519 = expected_ed25519.strip().lower()
+    expected_mldsa65 = expected_mldsa65.strip().lower()
 
     # Compute actual fingerprints over the committed bytes
     try:
@@ -98,6 +103,24 @@ def main() -> int:
         mldsa65_raw = MLDSA65_KEY_FILE.read_bytes()
     except (OSError, ValueError) as e:
         print(f"ERROR reading key files: {e}", file=sys.stderr)
+        return 2
+
+    # Defense-in-depth size invariants (FIPS 204 + Ed25519 RFC 8032). Catches
+    # truncated/padded files with a clear error before they propagate to a
+    # confusing fingerprint mismatch downstream.
+    if len(ed25519_raw) != 32:
+        print(
+            f"ERROR: keys/ed25519-public.pem extracted to {len(ed25519_raw)}B; "
+            f"expected exactly 32B (Ed25519 raw public-key size per RFC 8032)",
+            file=sys.stderr,
+        )
+        return 2
+    if len(mldsa65_raw) != 1952:
+        print(
+            f"ERROR: keys/mldsa65-public.bin is {len(mldsa65_raw)}B; "
+            f"expected exactly 1952B (ML-DSA-65 raw public-key size per FIPS 204 Table 2)",
+            file=sys.stderr,
+        )
         return 2
 
     actual_ed25519 = _sha256_hex(ed25519_raw)

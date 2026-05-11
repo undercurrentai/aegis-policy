@@ -47,6 +47,17 @@ WRAPPED_LEN = MLDSA65_RAW_LEN + 1  # +1 for the unused-bits-count byte
 WRAPPED_LEN_HI = (WRAPPED_LEN >> 8) & 0xFF
 WRAPPED_LEN_LO = WRAPPED_LEN & 0xFF
 
+# DER encoding of OID 2.16.840.1.101.3.4.3.18 (id-ml-dsa-65 per NIST CSOR + FIPS 204):
+#   tag=06 (OID), length=09, value=60 86 48 01 65 03 04 03 12 (9 bytes)
+# This appears in the AlgorithmIdentifier inside the X.509 SubjectPublicKeyInfo
+# BEFORE the BIT STRING that wraps the raw 1952B public key. Anchoring on the OID
+# first eliminates false BIT STRING matches earlier in the DER (defense-in-depth
+# against future GCP KMS PEM format changes that may embed length-1953 patterns
+# in unrelated structures, OR maliciously-crafted PEMs containing collision bytes).
+ML_DSA_65_OID_DER = bytes(
+    [0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x12]
+)
+
 
 def extract_raw(pem_bytes: bytes) -> bytes:
     """Parse a PEM-wrapped X.509 SubjectPublicKeyInfo + return 1952B raw."""
@@ -60,14 +71,42 @@ def extract_raw(pem_bytes: bytes) -> bytes:
         raise ValueError("Input is not a valid PEM-wrapped PUBLIC KEY block")
     der = base64.b64decode(body_match.group(1).replace("\n", "").replace("\r", ""))
 
-    # Scan DER for the BIT STRING marker with length 1953
-    marker = bytes([BIT_STRING_TAG, LENGTH_LONG_FORM_2BYTES, WRAPPED_LEN_HI, WRAPPED_LEN_LO])
-    idx = der.find(marker)
+    # Anchor 1: locate ML-DSA-65 OID inside the AlgorithmIdentifier. Refuses
+    # to extract from any non-ML-DSA-65 input even if it happens to contain
+    # the BIT STRING length pattern.
+    oid_idx = der.find(ML_DSA_65_OID_DER)
+    if oid_idx < 0:
+        raise ValueError(
+            f"DER does not contain ML-DSA-65 OID {ML_DSA_65_OID_DER.hex()} "
+            f"(algorithm is NOT ML-DSA-65, or PEM is not a "
+            f"SubjectPublicKeyInfo)"
+        )
+
+    # Anchor 2: BIT STRING with length 1953 must appear AFTER the OID
+    # (per X.509 SPKI structure: AlgorithmIdentifier(OID) precedes
+    # subjectPublicKey(BIT STRING)). Searching from oid_idx prevents matching
+    # any earlier coincidental byte sequence in the DER.
+    marker = bytes(
+        [BIT_STRING_TAG, LENGTH_LONG_FORM_2BYTES, WRAPPED_LEN_HI, WRAPPED_LEN_LO]
+    )
+    idx = der.find(marker, oid_idx)
     if idx < 0:
         raise ValueError(
-            f"DER does not contain expected BIT STRING marker "
-            f"{marker.hex()} (algorithm not ML-DSA-65, or PEM format unexpected)"
+            f"DER contains ML-DSA-65 OID but no length-1953 BIT STRING "
+            f"after it (marker {marker.hex()}); PEM structure unexpected"
         )
+
+    # Anchor 3 (uniqueness): no second BIT-STRING-1953 marker may exist later
+    # in the DER. Multiple matches signal an ambiguous parse — refuse rather
+    # than guess which one wraps the public key.
+    second_idx = der.find(marker, idx + 1)
+    if second_idx >= 0:
+        raise ValueError(
+            f"DER contains MULTIPLE BIT STRING markers {marker.hex()} "
+            f"(at offsets {idx} and {second_idx}); ambiguous extraction "
+            f"refused. PEM may be malformed or attacker-crafted."
+        )
+
     # marker is 4 bytes; +1 for unused-bits-count byte (always 0 for byte-aligned keys)
     raw_start = idx + 5
     raw = der[raw_start : raw_start + MLDSA65_RAW_LEN]
