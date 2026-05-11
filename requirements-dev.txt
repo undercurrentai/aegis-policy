@@ -8,7 +8,7 @@
 # file's header for refresh procedure.
 
 # YAML parsing for the parity check + lint workflow's parse-smoke loop.
-PyYAML>=6.0
+PyYAML>=6.0.3
 
 # Ed25519 PEM → raw 32B extraction for the fingerprint-parity gate
 # (scripts/check_fingerprints.py). Sprint 5/E1.5 Phase 5 C5 dependency.
