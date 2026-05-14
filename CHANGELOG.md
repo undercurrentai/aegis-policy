@@ -6,6 +6,43 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 
 ---
 
+## [1.2.0] — 2026-05-13
+
+**Sprint 5/E3 ship** — closes cosmic-flute task #29 (reusable workflow) + bundles task #129 deferred E2 doc-flips per cosmic-flute §34.17.3.
+
+### Added
+
+- **`.github/workflows/aegis-verify-attestation.yml`** (reusable workflow). Job-level orchestration wrapper around the composite Action shipped in Sprint 5/E2 (commit `19a751e`). Triggered by `workflow_call:`. Consumers invoke at the JOB level via `uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>`. 12 inputs (9 standard: envelope / expected-digest / expected-environment / policy-version-expected / replay-store-path / python-version / aegis-sdk-version / aegis-sdk-git-ref / runs-on; plus 3 test-only: internal-fixture-mode / internal-keys-dir-override / internal-policy-path-override propagating via env: not with: per cosmic-flute §35.11 dec C). 1 optional secret AEGIS_SDK_FETCH_TOKEN. 9 outputs identical to the composite Action surface (two-stage indirection step → job.outputs → workflow_call.outputs). Single `verify` job: (1) `actions/checkout@de0fac2e` of aegis-policy at `github.event.workflow.ref` (ensures composite matches caller's `@<sha>` pin for byte-exact key/policy/script consistency), (2) composite Action invocation forwarding all 8 standard inputs + test-only env vars + AEGIS_SDK_FETCH_TOKEN. Permissions: `contents: read` minimum (caller declares full union per reusable-workflow propagation rules).
+- **`actions/verify-aegis-attestation/REUSABLE-WORKFLOW.md`** (~270 lines) — consumer-facing docs for the reusable workflow surface specifically. Sections: TL;DR, when-to-use-composite-vs-reusable decision matrix (industry precedent: SLSA-framework BYOB pattern, Tool Reusable Workflow wraps Tool Callback Action), full inputs tables (9 standard + 3 test-only), secrets propagation (explicit secrets: block vs `secrets: inherit`), outputs reference pattern (`needs.<job-id>.outputs.<X>`), permissions union pattern with link to GitHub Docs, worked example for deploy gate, worked example for risk-class downstream gate (env: propagation per GitHub Security Lab pattern; recommends `environment:` gating with required reviewers for high/critical), SHA-pinning expectations, versioning (3 knobs identical to composite — no new versioning surface).
+- **`.github/workflows/e3-workflow-selftest.yml`** — `workflow_dispatch:`-only self-test for the reusable workflow. 9 jobs across 4 selftest+assert pairs: (1) happy-path → assert valid=true + replay-checked=true; (2) tampered-digest → assert AttestationDigestMismatch; (3) expired → assert AttestationExpired; (4) replay-detection split into 3 jobs (first-call → setup that uploads seeded replay store as `actions/upload-artifact` → second job downloads + invokes composite Action directly with seeded store → assert AttestationReplayDetected) — necessary split because GitHub job isolation prevents pre-seeding the runner-local replay store FROM a previous job's runner WITHIN a reusable-workflow invocation. Reuses E2-shipped fixtures (tests/fixtures/envelope-*.json + test-keys/ + policy-test-v1.yaml). Activation path post-task-#59 PyPI publish identical to e2-action-selftest.
+
+### Changed
+
+- **`actions/verify-aegis-attestation/README.md`** (~20 LOC delta): added "## Reusable workflow alternative" section right after TL;DR with a 4-line invocation snippet + link to REUSABLE-WORKFLOW.md; replaced the stale "A future Sprint 5/E3 reusable workflow (task #29) will bundle this risk-class gating logic" footer (Sprint 5/E3 IS now this work) with a forward-link to REUSABLE-WORKFLOW.md §"Worked example: risk-class downstream gate".
+- **`docs/roadmap.md`** (Sprint 5/E2 + E3 + dep graph) — bundled task #129 doc-flips per cosmic-flute §34.17.3:
+  - Sprint 5/E2 row: 🟡 in-progress → ✅ shipped 2026-05-13 (commit `19a751e`); tracking column captures the in-flight CI job-name remediation `ff0ec71` + admin sole-keyholder pattern per cosmic-flute §34.17.2.
+  - Sprint 5/E3 row: ☐ planned → 🟡 in-progress (this PR; merge SHA captured post-squash).
+  - Dependency graph: E2's `<merge-sha-pending>` → `19a751e`; new E3 "THIS PR" box inserted; closing arrows simplified to linear flow into Sprint 6/F1+F2 + Sprint 7/G1+G2+G3.
+- **`CHANGELOG.md` [1.1.0]** — added "### Post-merge notes" subsection documenting (a) the sustainable CI workflow job-name rename `ff0ec71` (resolves ruleset required_status_checks context-mismatch for the "AEGIS Shadow Evaluation" check), and (b) the transient OrganizationAdmin bypass cycle pattern per cosmic-flute §34.17.2 (operating pattern for sole-owner PRs until team grows beyond one engineer per ADR-001 documented growth path; bypass_actors=[] steady-state invariant per cosmic-flute §17 Critical 3 preserved).
+
+### Notes
+
+- **`policy/verifier-policy-v1.yaml` unchanged at v2.1.0** — no policy contract change. The reusable workflow is a thin orchestration wrapper; all crypto + fingerprint + replay-detection logic lives in the E2 composite Action (unchanged).
+- **`scripts/_verify_local_vendored.py` unchanged** — vendored SDK source still pins `aegis-governance@dc9c9df` from the E2 ship.
+- **Parity gates stay GREEN unchanged**: `check_error_class_parity.py` 15-vs-15 + `check_fingerprints.py` 2-vs-2. No taxonomy churn; no key rotation.
+- **Sprint 6/F1 (task #30; aegis-deploy.yml dogfood)** is the next planned consumer of the reusable workflow surface, per cosmic-flute §35.12. CLAUDE.md §8 Ask-First gate applies — separate plan + PR on `aegis-governance`.
+
+### Upstream references
+
+- Cosmic-flute plan §35: `~/.claude/plans/let-s-plan-this-cosmic-flute.md` (Ultraplan-approved 2026-05-14 session `01FqgCT4cEBWxjvaPmH9Ck5Q`)
+- Cosmic-flute §34: Sprint 5/E2 execution plan (composite Action this workflow wraps)
+- Cosmic-flute §34.17: Sprint 5/E2 ship capture + sole-keyholder merge pattern
+- ADR-001 §Decision: trust model + SHA-pinning + consumer-owned replay-detection responsibility
+- Upstream ADR-011: hybrid envelope spec + verifier-statelessness
+- SLSA-framework BYOB pattern: <https://slsa.dev/spec/v1.0/use-cases-build-tool-reusable-workflow>
+
+---
+
 ## [1.1.0] — 2026-05-13
 
 **Sprint 5/E2 ship** — closes cosmic-flute task #119 (consumer-owned replay-detection contract) + task #28 (composite GitHub Action).
