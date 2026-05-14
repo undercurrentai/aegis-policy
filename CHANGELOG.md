@@ -12,9 +12,10 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 
 ### Added
 
-- **`.github/workflows/aegis-verify-attestation.yml`** (reusable workflow). Job-level orchestration wrapper around the composite Action shipped in Sprint 5/E2 (commit `19a751e`). Triggered by `workflow_call:`. Consumers invoke at the JOB level via `uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>`. 12 inputs (9 standard: envelope / expected-digest / expected-environment / policy-version-expected / replay-store-path / python-version / aegis-sdk-version / aegis-sdk-git-ref / runs-on; plus 3 test-only: internal-fixture-mode / internal-keys-dir-override / internal-policy-path-override propagating via env: not with: per cosmic-flute §35.11 dec C). 1 optional secret AEGIS_SDK_FETCH_TOKEN. 9 outputs identical to the composite Action surface (two-stage indirection step → job.outputs → workflow_call.outputs). Single `verify` job: (1) `actions/checkout@de0fac2e` of aegis-policy at `github.event.workflow.ref` (ensures composite matches caller's `@<sha>` pin for byte-exact key/policy/script consistency), (2) composite Action invocation forwarding all 8 standard inputs + test-only env vars + AEGIS_SDK_FETCH_TOKEN. Permissions: `contents: read` minimum (caller declares full union per reusable-workflow propagation rules).
+- **`.github/workflows/aegis-verify-attestation.yml`** (reusable workflow). Job-level orchestration wrapper around the composite Action shipped in Sprint 5/E2 (commit `19a751e`). Triggered by `workflow_call:`. Consumers invoke at the JOB level via `uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>`. 12 inputs (9 standard: envelope / expected-digest / expected-environment / policy-version-expected / replay-store-path / python-version / aegis-sdk-version / aegis-sdk-git-ref / runs-on; plus 3 test-only: internal-fixture-mode / internal-keys-dir-override / internal-policy-path-override propagating via env: not with: per cosmic-flute §35.11 dec C). 1 optional secret AEGIS_SDK_FETCH_TOKEN. 9 outputs identical to the composite Action surface (two-stage indirection step → job.outputs → workflow_call.outputs). Single `verify` job: (1) `actions/checkout@de0fac2e` of aegis-policy at `github.workflow_sha` (ensures composite matches caller's `@<sha>` pin for byte-exact key/policy/script consistency — see §"Quality-gate hardening" below for the F1+F2 plan-time typo correction), (2) composite Action invocation forwarding all 8 standard inputs + test-only env vars + AEGIS_SDK_FETCH_TOKEN. Permissions: `contents: read` minimum (caller declares full union per reusable-workflow propagation rules).
 - **`actions/verify-aegis-attestation/REUSABLE-WORKFLOW.md`** (~270 lines) — consumer-facing docs for the reusable workflow surface specifically. Sections: TL;DR, when-to-use-composite-vs-reusable decision matrix (industry precedent: SLSA-framework BYOB pattern, Tool Reusable Workflow wraps Tool Callback Action), full inputs tables (9 standard + 3 test-only), secrets propagation (explicit secrets: block vs `secrets: inherit`), outputs reference pattern (`needs.<job-id>.outputs.<X>`), permissions union pattern with link to GitHub Docs, worked example for deploy gate, worked example for risk-class downstream gate (env: propagation per GitHub Security Lab pattern; recommends `environment:` gating with required reviewers for high/critical), SHA-pinning expectations, versioning (3 knobs identical to composite — no new versioning surface).
-- **`.github/workflows/e3-workflow-selftest.yml`** — `workflow_dispatch:`-only self-test for the reusable workflow. 9 jobs across 4 selftest+assert pairs: (1) happy-path → assert valid=true + replay-checked=true; (2) tampered-digest → assert AttestationDigestMismatch; (3) expired → assert AttestationExpired; (4) replay-detection split into 3 jobs (first-call → setup that uploads seeded replay store as `actions/upload-artifact` → second job downloads + invokes composite Action directly with seeded store → assert AttestationReplayDetected) — necessary split because GitHub job isolation prevents pre-seeding the runner-local replay store FROM a previous job's runner WITHIN a reusable-workflow invocation. Reuses E2-shipped fixtures (tests/fixtures/envelope-*.json + test-keys/ + policy-test-v1.yaml). Activation path post-task-#59 PyPI publish identical to e2-action-selftest.
+- **`.github/workflows/e3-workflow-selftest.yml`** — `workflow_dispatch:`-only self-test for the reusable workflow. 9 jobs across 4 selftest+assert pairs: (1) happy-path → assert valid=true + replay-checked=true; (2) tampered-digest → assert AttestationDigestMismatch; (3) expired → assert AttestationExpired; (4) replay-detection split into 3 jobs (first-call → setup that uploads seeded replay store as `actions/upload-artifact` → second job downloads + invokes composite Action directly with seeded store → assert AttestationReplayDetected) — necessary split because GitHub job isolation prevents pre-seeding the runner-local replay store FROM a previous job's runner WITHIN a reusable-workflow invocation. The expected-FAILURE assert jobs (assert-tampered-digest + assert-expired) declare `if: ${{ !cancelled() }}` so they surface error_class assertions even when the upstream reusable-workflow `verify` job FAILS (per the F4 remediation captured in §"Quality-gate hardening" below). Reuses E2-shipped fixtures (tests/fixtures/envelope-*.json + test-keys/ + policy-test-v1.yaml). Activation path post-task-#59 PyPI publish identical to e2-action-selftest.
+- **`tests/test_workflow_invariants.py`** — 6 regression tests across 3 classes guarding against Phase 2 bug-hunt findings recurring: `TestReusableWorkflowF1F2Regression` × 2 (asserts `github.workflow_sha` is the checkout ref + defensively rejects `github.event.workflow.ref`); `TestSelftestWorkflowF4Regression` × 2 (asserts assert-tampered-digest + assert-expired declare `if:` with `always()` | `!cancelled()` | `failure()` patterns + explicitly rejects `success()` per Phase 3 Probe 3 tightening; asserts selftest-replay-second's STEP-level `continue-on-error: true` preserved); `TestSlsaUrlF8Regression` × 2 (asserts REUSABLE-WORKFLOW.md + CHANGELOG.md use valid BYOB.md URL not the dead slsa.dev URL).
 
 ### Changed
 
@@ -31,6 +32,45 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 - **`scripts/_verify_local_vendored.py` unchanged** — vendored SDK source still pins `aegis-governance@dc9c9df` from the E2 ship.
 - **Parity gates stay GREEN unchanged**: `check_error_class_parity.py` 15-vs-15 + `check_fingerprints.py` 2-vs-2. No taxonomy churn; no key rotation.
 - **Sprint 6/F1 (task #30; aegis-deploy.yml dogfood)** is the next planned consumer of the reusable workflow surface, per cosmic-flute §35.12. CLAUDE.md §8 Ask-First gate applies — separate plan + PR on `aegis-governance`.
+
+### Quality-gate hardening (Phase 2 + Phase 3 remediations)
+
+Pre-ship `/quality-gate` 9-phase exhaustive run remediated 8 findings + added 6 regression tests + tightened 1 test post-Phase-3:
+
+**Phase 2 /bug-hunt cycle 1 — 4 BLOCKING + 4 LOW remediated** (commit `a38cc73`):
+
+- **F1+F2 HIGH/C3** (one root cause; 2 file manifestations): `aegis-verify-attestation.yml` line 180 used `github.event.workflow.ref` which is NOT a documented GitHub Actions context variable for `workflow_call:` invocations (cosmic-flute §35.4 propagated a plan-time typo). WebFetch of `docs.github.com/en/actions/reference/contexts-reference` 2026-05-13 confirmed canonical is `github.workflow_sha` ("The commit SHA of the workflow file that defines the current job") — for `uses: <repo>/<path>@<sha>`, resolves to exactly the SHA the caller pinned. Fixed both sites + added explanatory comment block at `aegis-verify-attestation.yml:169-184` documenting historical typo.
+- **F4 HIGH/C3**: `e3-workflow-selftest.yml`'s assert-tampered-digest + assert-expired must declare `if: ${{ !cancelled() }}` to run when the upstream reusable-workflow `verify` job FAILS. GitHub Actions does NOT support `continue-on-error: true` on reusable-workflow `uses:` invocations (job-level), AND the composite Action's `verify_action.py` exits 1 on `valid=false` — meaning the reusable workflow's `verify` job propagates FAIL to its caller. Without the `if:` clause, the assert jobs SKIP by default, masking whether the AEGIS-taxonomy error_class actually surfaced.
+- **F5 MEDIUM/C3**: `e3-workflow-selftest.yml` replay-detection comment blocks (lines 172-205) incorrectly described the seeded `decision_id` as "committed alongside the fixtures" — actually a live runtime value flowed through reusable-workflow outputs. Rewrote both comment blocks to honestly document: (a) decision_id flows via outputs (proves workflow_call indirection works), and (b) the coverage gap that the reusable-workflow `AttestationReplayDetected` surface is verified INDIRECTLY via the composite Action's same code path.
+- **F8 LOW/C3 (fixed)**: Dead `slsa.dev` BYOB-pattern URL (the prior plan-time citation returned HTTP 404 per WebFetch 2026-05-13) replaced with the valid canonical `github.com/slsa-framework/slsa-github-generator/blob/main/BYOB.md` in both REUSABLE-WORKFLOW.md (line 315) and CHANGELOG.md [1.2.0] §"Upstream references". Regression-guarded by `TestSlsaUrlF8Regression` (2 tests).
+- **F10 LOW/C2 (fixed)**: REUSABLE-WORKFLOW.md "When to use" decision-matrix runs-on row corrected — caller DOES control `runs-on` via the `runs-on` input; prior row incorrectly said "NO".
+- **F11 LOW/C2 (fixed)**: REUSABLE-WORKFLOW.md "Industry precedent" cell relabeled "slsa-installer" → "slsa-verifier/actions/installer" (the actual repo path).
+- **F13 INFO/C3 (fixed)**: `docs/roadmap.md` Sprint 6/F1 row clarified to name the reusable workflow surface (E3) as the dogfood target.
+
+**Phase 2 deferred LOWs**:
+- F9+F12 LOW/C3 emoji-width ASCII drift in 3 dep-graph boxes — documented in `.quality-gate/accepted-findings.jsonl` as `wontfix`. Cosmetic only; no functional/CI impact.
+
+**Phase 2 pre-flagged findings verdict**:
+- PRE-A CONFIRMED → F1+F2 fix
+- PRE-B REFUTED — `actions/upload-artifact@ea165f8d…` + `actions/download-artifact@d3f86a10…` are valid v4.6.2 + v4.3.0 SHAs (verified via GitHub releases page)
+- PRE-C CONFIRMED → F8 fix
+
+**Phase 3 /ultrathink 10-probe adversarial audit — 1 finding remediated** (commit `5d2c0ed`):
+
+- **Probe 3 LOW/C3**: `test_assert_jobs_for_expected_failure_run_even_on_upstream_fail` accepted `success()` in its `allowed_patterns` set — a future regression `if: ${{ !cancelled() }}` → `if: ${{ success() }}` (which would silently re-introduce the F4 bug) would still pass the test. Tightened to exclude `success()` + added defensive negative assertion.
+- Probes 1, 2, 4-10: NO findings (10-probe coverage on context-variable correctness, `!cancelled()` semantics, edge cases, E2 regression risk, GHES out-of-scope, input mapping, forward-compat informational, run-summary tradeoff informational, README link integrity).
+
+**Post-remediation gate state**:
+- pytest: **26/26 PASS** (20 baseline + 6 new regression)
+- error-class parity: **15-vs-15 PASS** (no taxonomy change)
+- fingerprint parity: **2-vs-2 PASS** (no key change)
+- YAML parse: 2/2 NEW workflows + 9 existing = 11/11 OK
+- yamllint -d relaxed: exit 0 (line-length warnings only)
+- 0 new TODO/FIXME; 0 new external dependencies; 0 new credentials; 0 production runtime impact
+
+**Phase 4 /review** (senior-eng pre-merge audit, 8 sections): APPROVE for merge.
+**Phase 5 /ai-code-review** (pre+post-flight 11-check anti-pattern audit): 0 issues across all checks.
+**Phase 6 full validation** (7 sub-checks mirroring CI gates): ALL GREEN.
 
 ### Upstream references
 
