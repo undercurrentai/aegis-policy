@@ -1,0 +1,218 @@
+# Sprint 5/E3 reusable workflow — job-level wrapper around the composite Action
+# at `actions/verify-aegis-attestation/`.
+#
+# Consumers pin by immutable commit SHA and invoke at the JOB level:
+#   jobs:
+#     verify-attestation:
+#       uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>
+#       with:
+#         envelope: "@artifacts/envelope.json"
+#         expected-digest: ${{ needs.build.outputs.sha256 }}
+#         expected-environment: production
+#         replay-store-path: .github/.aegis-replay.log
+#       secrets:
+#         AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
+#
+# Wraps:
+#   1. actions/checkout@<sha> of aegis-policy at the caller-pinned ref
+#      (github.event.workflow.ref ensures the composite Action matches the
+#      caller's `@<sha>` pin — critical for byte-exact key/policy/script
+#      consistency with the public-key fingerprints in policy/verifier-
+#      policy-v1.yaml).
+#   2. The composite Action invocation (`uses: ./aegis-policy/actions/
+#      verify-aegis-attestation`), forwarding all 8 standard inputs +
+#      AEGIS_SDK_FETCH_TOKEN secret + 3 test-only env vars.
+#
+# Both surfaces ship per cosmic-flute §35:
+#   - Composite Action (E2, shipped 19a751e): finer-grained STEP-level
+#     invocation. Use when splicing verify between custom steps in an
+#     existing job.
+#   - Reusable workflow (E3, this file): coarser-grained JOB-level
+#     invocation. Use when adding verify as a separate job with `needs:`
+#     chain — simpler consumer surface; matches SLSA-framework BYOB
+#     pattern (Tool Reusable Workflow wraps Tool Callback Action).
+#
+# Trigger: `workflow_call:` only. Self-test workflow at
+# `.github/workflows/e3-workflow-selftest.yml` exercises this end-to-end
+# under `workflow_dispatch:` until task #59 (aegis-sdk PyPI publish)
+# enables a `pull_request:` trigger with PR-time gating.
+#
+# See actions/verify-aegis-attestation/REUSABLE-WORKFLOW.md for full
+# consumer-facing documentation: when to use composite vs reusable,
+# secret-propagation pattern, permissions-union pattern, worked
+# examples, SHA-pinning expectations.
+
+name: AEGIS Verify Attestation (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      envelope:
+        description: "DSSE envelope JSON. Either inline JSON string OR `@path/to/file.json` (`@` prefix triggers workspace-relative file read)."
+        required: true
+        type: string
+      expected-digest:
+        description: "Expected SHA-256 hex (64 lowercase chars) of the subject artifact. Byte-exact compare against envelope.predicate.subject[0].digest.sha256."
+        required: true
+        type: string
+      expected-environment:
+        description: "Expected attestation environment. One of: production | staging | preview."
+        required: true
+        type: string
+      policy-version-expected:
+        description: "Optional strict-equal check against envelope.predicate.governance.policy_version. Empty = read from this repo's policy/verifier-policy-v1.yaml policy_version field (currently 2.1.0)."
+        required: false
+        type: string
+        default: ""
+      replay-store-path:
+        description: "Optional workspace-relative path to consumer-owned append-only replay-detection file. When set, action consults the file + appends decision_id on success; fails with AttestationReplayDetected on duplicate. When unset, emits ::warning:: (consumer must implement replay detection externally). See policy/verifier-policy-v1.yaml replay_detection block."
+        required: false
+        type: string
+        default: ""
+      python-version:
+        description: "Python version for setup-python. Default matches portfolio convention (Python 3.13)."
+        required: false
+        type: string
+        default: "3.13"
+      aegis-sdk-version:
+        description: "PyPI version pin for aegis-governance[verify] SDK. Used when aegis-sdk-git-ref is empty. Until task #59 (PyPI publish) lands, set aegis-sdk-git-ref instead."
+        required: false
+        type: string
+        default: "1.0.0"
+      aegis-sdk-git-ref:
+        description: "Optional Git ref (commit SHA / tag / branch) for aegis-sdk install via Git. When set, overrides aegis-sdk-version. Requires AEGIS_SDK_FETCH_TOKEN secret if aegis-governance is private."
+        required: false
+        type: string
+        default: ""
+      runs-on:
+        description: "Runner label. Default matches portfolio convention (Blacksmith 4vCPU)."
+        required: false
+        type: string
+        default: "blacksmith-4vcpu-ubuntu-2404"
+      # ----------------------------------------------------------------
+      # TEST-ONLY INPUTS — propagate via env: not with: per cosmic-flute
+      # §35.5 + §35.11 dec C (matches E2 composite Action's sentinel-gate
+      # pattern in scripts/verify_action.py::_fixture_mode_enabled, Phase
+      # 3 ultrathink probe 4 remediation). Production consumers MUST
+      # leave all three at their defaults. The OVERRIDE inputs are
+      # silently ignored unless internal-fixture-mode == "1".
+      # ----------------------------------------------------------------
+      internal-fixture-mode:
+        description: "TEST-ONLY. Set to '1' to enable internal-keys-dir-override + internal-policy-path-override. NEVER set in production. Used exclusively by e3-workflow-selftest.yml."
+        required: false
+        type: string
+        default: ""
+      internal-keys-dir-override:
+        description: "TEST-ONLY. Workspace-relative override for keys/ directory; only honored when internal-fixture-mode='1'. NEVER set in production."
+        required: false
+        type: string
+        default: ""
+      internal-policy-path-override:
+        description: "TEST-ONLY. Workspace-relative override for policy/verifier-policy-v1.yaml path; only honored when internal-fixture-mode='1'. NEVER set in production."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      AEGIS_SDK_FETCH_TOKEN:
+        description: "Optional PAT with read access to private undercurrentai/aegis-governance. Required only when aegis-sdk-git-ref is set AND aegis-governance is private. Ignored when aegis-sdk-version is used (PyPI public path)."
+        required: false
+    outputs:
+      valid:
+        description: "true | false — overall verification outcome."
+        value: ${{ jobs.verify.outputs.valid }}
+      error-class:
+        description: "Empty on success. On failure: one of the 15 verifier-layer error_class strings from policy/verifier-policy-v1.yaml fail_closed_on, OR one of the 4 composite-action-layer strings (AttestationKeyFingerprintMismatch, AttestationPolicyVersionMismatch, AttestationReplayDetected, AttestationEnvelopeShapeInvalid)."
+        value: ${{ jobs.verify.outputs.error-class }}
+      decision-id:
+        description: "envelope.predicate.governance.decision_id — UUID (lowercase 36 chars)."
+        value: ${{ jobs.verify.outputs.decision-id }}
+      artifact-digest:
+        description: "envelope.predicate.governance.artifact_digest — echoed."
+        value: ${{ jobs.verify.outputs.artifact-digest }}
+      environment:
+        description: "envelope.predicate.governance.environment — echoed."
+        value: ${{ jobs.verify.outputs.environment }}
+      policy-version:
+        description: "envelope.predicate.governance.policy_version — echoed."
+        value: ${{ jobs.verify.outputs.policy-version }}
+      expires-at:
+        description: "envelope.predicate.governance.expires_at — ISO 8601 UTC."
+        value: ${{ jobs.verify.outputs.expires-at }}
+      nonce:
+        description: "envelope.predicate.governance.nonce — base64 (empty for low/medium risk_class)."
+        value: ${{ jobs.verify.outputs.nonce }}
+      replay-checked:
+        description: "true if replay-store-path was set AND the action consulted the store. false otherwise."
+        value: ${{ jobs.verify.outputs.replay-checked }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: AEGIS verify (reusable)
+    runs-on: ${{ inputs.runs-on }}
+    # Two-stage output indirection (step → job.outputs → workflow_call.outputs)
+    # is REQUIRED by GitHub Actions architecture per cosmic-flute §35.4 design
+    # note 2. Every output is plumbed through both layers.
+    outputs:
+      valid: ${{ steps.verify.outputs.valid }}
+      error-class: ${{ steps.verify.outputs.error-class }}
+      decision-id: ${{ steps.verify.outputs.decision-id }}
+      artifact-digest: ${{ steps.verify.outputs.artifact-digest }}
+      environment: ${{ steps.verify.outputs.environment }}
+      policy-version: ${{ steps.verify.outputs.policy-version }}
+      expires-at: ${{ steps.verify.outputs.expires-at }}
+      nonce: ${{ steps.verify.outputs.nonce }}
+      replay-checked: ${{ steps.verify.outputs.replay-checked }}
+    steps:
+      - name: Checkout aegis-policy at the pinned SHA
+        # github.workflow_sha resolves to the commit SHA of THIS reusable
+        # workflow file at execution time — for `uses: <repo>/.github/
+        # workflows/X.yml@<sha>` invocations, that's exactly the `<sha>`
+        # the caller pinned (verified against official GitHub Actions
+        # context-reference docs 2026-05-13). This ensures the composite
+        # Action checked out below matches byte-for-byte the ref the
+        # caller pinned — critical because the public-key fingerprints
+        # in policy/verifier-policy-v1.yaml MUST match the bytes in
+        # keys/, and a mismatched ref would invalidate the runtime
+        # fingerprint cross-check in scripts/verify_action.py.
+        #
+        # Note: an earlier plan-time draft used `github.event.workflow.ref`
+        # — that is NOT a documented context variable for workflow_call
+        # invocations; it evaluates to empty string, causing actions/
+        # checkout to fall back to the named repository's default branch
+        # (NOT the caller-pinned SHA). Bug-hunt F1/F2 caught this.
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        with:
+          repository: undercurrentai/aegis-policy
+          ref: ${{ github.workflow_sha }}
+          path: aegis-policy
+
+      - name: Verify attestation (delegate to composite action)
+        id: verify
+        uses: ./aegis-policy/actions/verify-aegis-attestation
+        with:
+          envelope: ${{ inputs.envelope }}
+          expected-digest: ${{ inputs.expected-digest }}
+          expected-environment: ${{ inputs.expected-environment }}
+          policy-version-expected: ${{ inputs.policy-version-expected }}
+          replay-store-path: ${{ inputs.replay-store-path }}
+          python-version: ${{ inputs.python-version }}
+          aegis-sdk-version: ${{ inputs.aegis-sdk-version }}
+          aegis-sdk-git-ref: ${{ inputs.aegis-sdk-git-ref }}
+        env:
+          # AEGIS_SDK_FETCH_TOKEN propagates the caller's secret to the
+          # composite Action's install step. Composite reads it via env
+          # when constructing the authenticated pip install URL (or
+          # ignores it on the PyPI path).
+          AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
+          # Test-only env vars per cosmic-flute §35.5 + §35.11 dec C.
+          # The sentinel + 2 OVERRIDEs are silently ignored by
+          # scripts/verify_action.py unless AEGIS_INTERNAL_FIXTURE_MODE='1'
+          # (Phase 3 ultrathink probe 4 remediation in E2). Production
+          # consumers leave all three at their defaults — empty strings
+          # flow through harmlessly.
+          AEGIS_INTERNAL_FIXTURE_MODE: ${{ inputs.internal-fixture-mode }}
+          AEGIS_KEYS_DIR_OVERRIDE: ${{ inputs.internal-keys-dir-override }}
+          AEGIS_POLICY_PATH_OVERRIDE: ${{ inputs.internal-policy-path-override }}

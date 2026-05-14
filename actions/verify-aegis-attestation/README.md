@@ -27,6 +27,24 @@ Sprint 5/E2 — closes cosmic-flute §34 (tasks #28 + #119). See also:
 
 ---
 
+## Reusable workflow alternative
+
+For consumers who prefer job-level invocation over step-level (most new consumer repos), Sprint 5/E3 ships a companion reusable workflow:
+
+```yaml
+jobs:
+  verify-attestation:
+    uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>
+    with:
+      envelope: "@artifacts/envelope.json"
+      expected-digest: ${{ needs.build.outputs.sha256 }}
+      expected-environment: production
+```
+
+See [`REUSABLE-WORKFLOW.md`](REUSABLE-WORKFLOW.md) for full docs on the reusable workflow surface (when to use it vs. this composite Action, secrets propagation, permissions union, worked examples).
+
+---
+
 ## Inputs
 
 | Input | Required | Default | Description |
@@ -229,7 +247,7 @@ The verifier itself does NOT check risk_class — it only validates the cryptogr
     exit 1
 ```
 
-A future Sprint 5/E3 reusable workflow (task #29) will bundle this risk-class gating logic for `workflow_call:` consumers.
+For consumers who prefer this gating logic packaged at the job level rather than as inline steps, see [`REUSABLE-WORKFLOW.md`](REUSABLE-WORKFLOW.md) §"Worked example: risk-class downstream gate" — Sprint 5/E3 ships this same pattern via `workflow_call:`.
 
 ---
 
