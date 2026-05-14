@@ -6,6 +6,31 @@ Format: [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/). Versions
 
 ---
 
+## [2.1.0] — 2026-05-13
+
+**Sprint 5/E2 Phase A** — closes task #119 (consumer-owned replay-detection design dependency surfaced by post-ship /quality-gate Phase 3 ultrathink U1 on v1.2.4).
+
+### Added
+
+- **`replay_detection:` top-level block** documenting the consumer-owned replay-detection contract. AEGIS verifier (server-side `/attestations/verify` + SDK offline `verify_attestation_locally`) is STATELESS by design per upstream ADR-011 §"Verifier statelessness". Replay detection is consumer-owned. The new block specifies: policy (`consumer-owned`); primary mechanism (`decision-id-uniqueness` — all risk classes); secondary mechanism (`nonce-uniqueness` — high/critical only); enforcement layer (`consumer-ci-workflow`); 3 recommended stores (append-only file / DB unique constraint / Redis SETNX); composite-action support metadata (the `verify-aegis-attestation@<sha>` action accepts an optional `replay-store-path` input that implements the append-only-file mechanism for consumers without their own store).
+
+### Documentation
+
+- **ADR-001 §"Consumer-owned replay-detection responsibility"** new subsection under §Decision documents the responsibility split + implementation guidance (per Sprint 5/E2 Commit 2).
+
+### Compatibility
+
+- **`fail_closed_on:` unchanged at 15 entries** — replay-detection emits `AttestationReplayDetected` from the composite-action layer, NOT the verifier layer. SDK ↔ policy parity invariant preserved (parity gate still 15 vs 15; no SDK re-vendor needed).
+- **MINOR per SemVer** — additive contract field; consumers pinning v2.0.0 continue to function unchanged. Migration is opt-in: consumers wanting replay-detection bump their aegis-policy pin to this PR's merge SHA + add `replay-store-path` input to their workflow.
+
+### Upstream
+
+- Cosmic-flute plan §34: `~/.claude/plans/let-s-plan-this-cosmic-flute.md`
+- ADR-011 upstream: `https://github.com/undercurrentai/aegis-governance/blob/main/docs/architecture/adr/ADR-011-artifact-bound-aegis-attestations.md`
+- SDK source-of-truth: `aegis-sdk@1.0.0` (`aegis-governance` main `dc9c9df` — post v1.2.4)
+
+---
+
 ## [2.0.0] — 2026-05-10
 
 **BREAKING** — Algorithm migration ML-DSA-44 → ML-DSA-65 per upstream [ADR-012](https://github.com/undercurrentai/aegis-governance/blob/main/docs/architecture/adr/ADR-012-ml-dsa-44-to-65-migration.md); real key fingerprints replace placeholders. Sprint 5/E1.5 Phase 5 ship.

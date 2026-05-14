@@ -28,6 +28,7 @@ How `policy/verifier-policy-v1.yaml` was derived. Each field below is traced to 
 | `nonce_byte_length` | int | ADR-011: 256-bit (32 bytes) | NO |
 | `fail_closed_on` | list | **`aegis-sdk/src/aegis/_verify_local.py` post-Sprint-5/E1.5-Phase-4** — every error_class string the SDK can return must appear here (snake_case-translated). 15 entries on main `7e422b2`. Algorithm migration ML-DSA-44 → ML-DSA-65 did NOT change the taxonomy (parity gate confirms 15-vs-15 PASS pre- and post-migration). | NO — schema-locked + parity-enforced by `error-class-parity.yml` CI workflow |
 | `policy_version_compatibility` | literal | ADR-011 N3: strict-equal | YES — could relax to semver-major-equal if churn justifies (would need its own ADR) |
+| `replay_detection` | block | Sprint 5/E2 Phase A (task #119): consumer-owned replay-detection contract derived from upstream ADR-011 §"Verifier statelessness" + ADR-001 §"Consumer-owned replay-detection responsibility" (added in Commit 2 of this PR) | NO (contract-locked; composite-action support metadata reflects the action's actual behavior) |
 
 ## Tunable-field change procedure
 
@@ -57,3 +58,4 @@ For schema-locked fields (algorithms, context_string, key sizes, error_class tax
 |---|---|---|---|
 | 1.0.0 (2026-05-09) | `aegis-governance@a5c0bfd` (Sprint 1 squash-merge) | `aegis-governance@37f8608` (Sprint 4/D2 audit-pass) | Bootstrap; placeholder fingerprints; ml-dsa-44 algorithm |
 | 2.0.0 (2026-05-10) | `aegis-governance@7e422b2` (Sprint 5/E1.5 Phase 4 + audit PR #171) | `aegis-governance@7e422b2` | BREAKING: ml-dsa-44 → ml-dsa-65; real fingerprints; uniform prefix-hash-and-sign per ADR-012 |
+| 2.1.0 (2026-05-13) | `aegis-governance@dc9c9df` (post-v1.2.4) — unchanged | `aegis-governance@dc9c9df` — unchanged | MINOR additive: `replay_detection:` block + ADR-001 §"Consumer-owned replay-detection responsibility". No schema/SDK changes; SDK ↔ policy parity preserved (15 vs 15). |

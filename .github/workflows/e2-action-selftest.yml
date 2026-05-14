@@ -1,0 +1,216 @@
+name: E2 Action Self-Test
+
+# Sprint 5/E2 self-test workflow for actions/verify-aegis-attestation/action.yml.
+#
+# Two layers:
+#   1. unit-tests job — runs tests/test_verify_action.py against fixtures; exercises
+#      scripts/verify_action.py end-to-end as subprocess. Catches script regressions
+#      without depending on GitHub Actions composite-step plumbing.
+#   2. action-invocation jobs (4) — invoke the composite action via `uses: ./actions/...`,
+#      exercising the action.yml inputs/outputs/composite-step machinery. Validates
+#      that the action's wire format matches verify_action.py's expectations.
+#
+# Trigger: `workflow_dispatch:` only at v1.1.0 ship.
+#
+# **Why not pull_request: yet?** Both layers need aegis-sdk[verify] installed in CI.
+# aegis-sdk 1.0.0 is not on PyPI as of 2026-05-13 (tracked in cosmic-flute as task #59
+# AU-N-1). Until then, install requires fetching from `git+https://github.com/
+# undercurrentai/aegis-governance@dc9c9df#subdirectory=aegis-sdk[verify]`, which
+# requires read access to a private repo. The default GITHUB_TOKEN does not have
+# cross-repo access; a PAT secret (AEGIS_SDK_FETCH_TOKEN) must be configured first.
+#
+# **Activation path post-task-#59 ship**:
+#   1. Once aegis-governance[verify] is on PyPI, drop the `aegis-sdk-git-ref`
+#      input from the action-invocation jobs (PyPI install becomes default).
+#   2. Add `pull_request:` trigger here with paths filter matching action.yml,
+#      verify_action.py, fixtures, this workflow file, policy/verifier-policy-v1.yaml,
+#      and keys/.
+#   3. Add this workflow's check name (`E2 Action Self-Test / unit-tests`) to the
+#      org-Ruleset `aegis-attestation-required-checks` (Sprint 5/E1.5 Phase 7
+#      configured this ruleset; see cosmic-flute §28.3 Phase 7).
+#
+# Until then, run manually via:
+#   gh workflow run e2-action-selftest.yml --repo undercurrentai/aegis-policy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    name: Unit tests (tests/test_verify_action.py)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Install aegis-sdk[verify] + dev deps
+        # Until task #59 PyPI publish: fetches aegis-governance@dc9c9df via the
+        # AEGIS_SDK_FETCH_TOKEN secret (a PAT with read access to private
+        # undercurrentai/aegis-governance). The token IS NOT required at PR time
+        # because this workflow is workflow_dispatch-only; admin sets the secret
+        # in repo settings before invoking.
+        env:
+          AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          pip install pytest pyyaml
+          if [[ -n "${AEGIS_SDK_FETCH_TOKEN}" ]]; then
+            pip install "git+https://${AEGIS_SDK_FETCH_TOKEN}@github.com/undercurrentai/aegis-governance@dc9c9df#subdirectory=aegis-sdk[verify]"
+          else
+            echo "::error::AEGIS_SDK_FETCH_TOKEN secret not set; cannot install aegis-sdk from private repo. See workflow header comment for activation steps."
+            exit 1
+          fi
+
+      - name: Run unit tests
+        run: pytest tests/test_verify_action.py -v --tb=short
+
+  action-invocation-happy-path:
+    name: Composite action — happy path
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Verify (happy path)
+        id: verify
+        uses: ./actions/verify-aegis-attestation
+        with:
+          envelope: "@tests/fixtures/envelope-valid-preview.json"
+          expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
+          expected-environment: "preview"
+          replay-store-path: ".aegis-replay-happy.log"
+          aegis-sdk-git-ref: dc9c9df
+        env:
+          # Self-test override: point action at test fixtures instead of production keys/policy
+          AEGIS_KEYS_DIR_OVERRIDE: tests/fixtures/test-keys
+          AEGIS_POLICY_PATH_OVERRIDE: tests/fixtures/policy-test-v1.yaml
+
+      - name: Assert happy outcome
+        # NB: this assert uses the dynamically-generated digest from
+        # tests/fixtures/manifest.json. If fixtures are regenerated locally,
+        # this expected-digest must be updated to match the new manifest. The
+        # generator script (tests/fixtures/generate_fixtures.py) prints the
+        # digest to stdout on each run.
+        run: |
+          test "${{ steps.verify.outputs.valid }}" = "true" || (echo "::error::valid != true"; exit 1)
+          test -z "${{ steps.verify.outputs.error-class }}" || (echo "::error::error-class not empty: ${{ steps.verify.outputs.error-class }}"; exit 1)
+          echo "Happy path PASS: decision-id=${{ steps.verify.outputs.decision-id }}"
+
+  action-invocation-tampered-digest:
+    name: Composite action — tampered digest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Verify (mismatched expected-digest)
+        id: verify
+        uses: ./actions/verify-aegis-attestation
+        continue-on-error: true
+        with:
+          envelope: "@tests/fixtures/envelope-tampered-digest.json"
+          expected-digest: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          expected-environment: "preview"
+          aegis-sdk-git-ref: dc9c9df
+        env:
+          # AEGIS_INTERNAL_FIXTURE_MODE=1 is the sentinel that enables the OVERRIDE
+          # env vars (scripts/verify_action.py::_fixture_mode_enabled — Phase 3
+          # ultrathink probe 4 remediation). Production consumers NEVER set this.
+          AEGIS_INTERNAL_FIXTURE_MODE: "1"
+          AEGIS_KEYS_DIR_OVERRIDE: tests/fixtures/test-keys
+          AEGIS_POLICY_PATH_OVERRIDE: tests/fixtures/policy-test-v1.yaml
+
+      - name: Assert AttestationDigestMismatch
+        run: |
+          test "${{ steps.verify.outputs.valid }}" = "false" || (echo "::error::expected valid=false; got ${{ steps.verify.outputs.valid }}"; exit 1)
+          test "${{ steps.verify.outputs.error-class }}" = "AttestationDigestMismatch" || (echo "::error::expected error-class=AttestationDigestMismatch; got ${{ steps.verify.outputs.error-class }}"; exit 1)
+          echo "Tampered-digest PASS"
+
+  action-invocation-expired:
+    name: Composite action — expired envelope
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Verify (expired)
+        id: verify
+        uses: ./actions/verify-aegis-attestation
+        continue-on-error: true
+        with:
+          envelope: "@tests/fixtures/envelope-expired.json"
+          expected-digest: "1ff5ccc05032641ada6f8a57995e2184e4da9f21672879fdaca61ba8b71e2bb5"
+          expected-environment: "preview"
+          aegis-sdk-git-ref: dc9c9df
+        env:
+          # AEGIS_INTERNAL_FIXTURE_MODE=1 is the sentinel that enables the OVERRIDE
+          # env vars (scripts/verify_action.py::_fixture_mode_enabled — Phase 3
+          # ultrathink probe 4 remediation). Production consumers NEVER set this.
+          AEGIS_INTERNAL_FIXTURE_MODE: "1"
+          AEGIS_KEYS_DIR_OVERRIDE: tests/fixtures/test-keys
+          AEGIS_POLICY_PATH_OVERRIDE: tests/fixtures/policy-test-v1.yaml
+
+      - name: Assert AttestationExpired
+        run: |
+          test "${{ steps.verify.outputs.valid }}" = "false" || (echo "::error::expected valid=false; got ${{ steps.verify.outputs.valid }}"; exit 1)
+          test "${{ steps.verify.outputs.error-class }}" = "AttestationExpired" || (echo "::error::expected error-class=AttestationExpired; got ${{ steps.verify.outputs.error-class }}"; exit 1)
+          echo "Expired PASS"
+
+  action-invocation-replay-detected:
+    name: Composite action — replay detection
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: First verify (should succeed + append decision_id)
+        id: verify1
+        uses: ./actions/verify-aegis-attestation
+        with:
+          envelope: "@tests/fixtures/envelope-valid-preview.json"
+          expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
+          expected-environment: "preview"
+          replay-store-path: ".aegis-replay-test.log"
+          aegis-sdk-git-ref: dc9c9df
+        env:
+          # AEGIS_INTERNAL_FIXTURE_MODE=1 is the sentinel that enables the OVERRIDE
+          # env vars (scripts/verify_action.py::_fixture_mode_enabled — Phase 3
+          # ultrathink probe 4 remediation). Production consumers NEVER set this.
+          AEGIS_INTERNAL_FIXTURE_MODE: "1"
+          AEGIS_KEYS_DIR_OVERRIDE: tests/fixtures/test-keys
+          AEGIS_POLICY_PATH_OVERRIDE: tests/fixtures/policy-test-v1.yaml
+
+      - name: Second verify (should fail with AttestationReplayDetected)
+        id: verify2
+        uses: ./actions/verify-aegis-attestation
+        continue-on-error: true
+        with:
+          envelope: "@tests/fixtures/envelope-valid-preview.json"
+          expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
+          expected-environment: "preview"
+          replay-store-path: ".aegis-replay-test.log"
+          aegis-sdk-git-ref: dc9c9df
+        env:
+          # AEGIS_INTERNAL_FIXTURE_MODE=1 is the sentinel that enables the OVERRIDE
+          # env vars (scripts/verify_action.py::_fixture_mode_enabled — Phase 3
+          # ultrathink probe 4 remediation). Production consumers NEVER set this.
+          AEGIS_INTERNAL_FIXTURE_MODE: "1"
+          AEGIS_KEYS_DIR_OVERRIDE: tests/fixtures/test-keys
+          AEGIS_POLICY_PATH_OVERRIDE: tests/fixtures/policy-test-v1.yaml
+
+      - name: Assert first PASS + second AttestationReplayDetected
+        run: |
+          test "${{ steps.verify1.outputs.valid }}" = "true" || (echo "::error::first call expected valid=true; got ${{ steps.verify1.outputs.valid }}"; exit 1)
+          test "${{ steps.verify1.outputs.replay-checked }}" = "true" || (echo "::error::first call expected replay-checked=true; got ${{ steps.verify1.outputs.replay-checked }}"; exit 1)
+          test "${{ steps.verify2.outputs.valid }}" = "false" || (echo "::error::second call expected valid=false; got ${{ steps.verify2.outputs.valid }}"; exit 1)
+          test "${{ steps.verify2.outputs.error-class }}" = "AttestationReplayDetected" || (echo "::error::second call expected error-class=AttestationReplayDetected; got ${{ steps.verify2.outputs.error-class }}"; exit 1)
+          echo "Replay-detected PASS"

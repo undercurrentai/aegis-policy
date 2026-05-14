@@ -72,6 +72,30 @@ Implementation specifics:
 - **Key rotation**: Git-versioned PEM/raw bytes; PR-gated rotation per `docs/key-rotation-runbook.md`; full ceremony defined in Sprint 5/E1.5.
 - **Distinct AEGIS instance evaluating policy changes**: deferred to Sprint 5/E1.5 (would require provisioning a separate AEGIS API key with restricted scope; out of E1 scope).
 
+### Consumer-owned replay-detection responsibility
+
+Added 2026-05-13 in Sprint 5/E2 Phase A (task #119; design dependency surfaced by post-ship /quality-gate Phase 3 ultrathink U1 on v1.2.4).
+
+AEGIS attestations bind to immutable build provenance and are cryptographically verifiable in isolation (per upstream ADR-011 §Decision). However, the verifier — both server-side `/attestations/verify` and SDK offline `verify_attestation_locally` — is **stateless by design**. The verifier does NOT track whether a given attestation envelope has been seen before.
+
+This is intentional: the verifier-stateless trust model (upstream ADR-011 §"Verifier statelessness") keeps the verification surface minimal, deterministic, and free of consumer-state dependencies. It also enables the same envelope to be verified in multiple downstream contexts without coordination.
+
+**Consequence**: replay detection is the consumer's responsibility. A consumer that accepts a verified envelope as authoritative MUST also check that the envelope's `decision_id` (or `nonce`, for high/critical risk_class) has not been seen before in the consumer's own authority domain.
+
+**Implementation guidance**:
+
+- **Primary mechanism (all risk classes)**: `decision_id`-uniqueness check. Every issued attestation carries a unique `decision_id` (UUID); consumers maintain a store of seen `decision_id` values and reject duplicates.
+- **Additional mechanism for `high`/`critical` risk_class**: `nonce`-uniqueness check on top of `decision_id` (defense-in-depth; the predicate's `nonce` field is always present for high/critical per `policy/verifier-policy-v1.yaml nonce_required_for_risk_classes`). Consumers requiring nonce-aware behavior hash `decision_id + nonce` into the store entry.
+- **Store options**: append-only file, DB unique constraint, Redis SETNX with TTL aligned to `envelope.predicate.governance.expires_at`, or equivalent.
+
+This matches the `policy/verifier-policy-v1.yaml replay_detection.mechanism_primary` (all classes) + `mechanism_secondary` (high/critical only) contract — additive, not mutually-exclusive.
+
+**Built-in support via Sprint 5/E2 composite Action**: the `undercurrentai/aegis-policy/actions/verify-aegis-attestation@<sha>` action (Sprint 5/E2) accepts an optional `replay-store-path` input that implements the append-only-file mechanism for consumers without their own store. When the input is unset, the action emits a `::warning::` in the step summary and still emits `valid: true` on cryptographic success — leaving the consumer's CI workflow to decide whether to gate on replay externally.
+
+The composite action emits `AttestationReplayDetected` from the action layer (NOT the verifier layer) when a duplicate `decision_id` is found in the consumer-owned store. This new error_class is documented in the action's README and is INTENTIONALLY OMITTED from `policy/verifier-policy-v1.yaml fail_closed_on` — preserving the SDK ↔ policy parity invariant (15 vs 15 entries) without requiring an SDK re-vendor.
+
+See `policy/verifier-policy-v1.yaml replay_detection` for the machine-readable contract.
+
 ## Consequences
 
 ### Positive
@@ -120,3 +144,4 @@ See cosmic-flute §26: `~/.claude/plans/let-s-plan-this-cosmic-flute.md`. Sequen
 | Date | Author | Change |
 |---|---|---|
 | 2026-05-09 | Claude Opus 4.7 (1M context) / Josh Kirby | Initial draft (Status: Accepted on bootstrap PR) |
+| 2026-05-13 | Claude Opus 4.7 (1M context) / Josh Kirby | Sprint 5/E2 Phase A: added §Decision subsection "Consumer-owned replay-detection responsibility" (closes task #119; companion to `policy/verifier-policy-v1.yaml replay_detection:` block + v2.1.0 bump). Status stays Accepted; this is an additive clarification, not a new decision. |
