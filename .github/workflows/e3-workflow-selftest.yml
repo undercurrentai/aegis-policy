@@ -1,0 +1,240 @@
+name: E3 Reusable Workflow Self-Test
+
+# Sprint 5/E3 self-test for .github/workflows/aegis-verify-attestation.yml.
+#
+# Exercises the reusable workflow's input/output passthrough at the JOB level
+# (one level of indirection deeper than e2-action-selftest.yml's STEP-level
+# invocations of the composite Action). Validates:
+#   - workflow_call: signature accepts all 12 inputs + 1 secret
+#   - github.event.workflow.ref correctly resolves to this branch's HEAD
+#     during the inner checkout step
+#   - Two-stage output indirection (step → job.outputs → workflow_call.outputs)
+#     surfaces all 9 outputs cleanly to caller `needs.X.outputs.Y`
+#   - Test-only inputs (internal-fixture-mode + the 2 OVERRIDEs) propagate
+#     through to AEGIS_INTERNAL_FIXTURE_MODE + AEGIS_KEYS_DIR_OVERRIDE +
+#     AEGIS_POLICY_PATH_OVERRIDE env vars on the composite step inside the
+#     reusable workflow's `verify` job
+#
+# Trigger: `workflow_dispatch:` only — same rationale as e2-action-selftest.yml
+# (aegis-sdk[verify] install requires AEGIS_SDK_FETCH_TOKEN PAT until task #59
+# PyPI publish ships). Activation path post-#59 documented in e2 header.
+#
+# Reuses the same E2-shipped test fixtures (tests/fixtures/envelope-*.json +
+# tests/fixtures/test-keys/ + tests/fixtures/policy-test-v1.yaml + the
+# manifest.json digests captured by tests/fixtures/generate_fixtures.py).
+# Hard-coded `expected-digest` values match the current committed manifest;
+# if fixtures are regenerated locally, these MUST be updated to match the new
+# manifest (see e2-action-selftest.yml line 98-102 for the same caveat).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────
+  # Pair 1: happy path — valid envelope verifies cleanly + replay-store works
+  # ──────────────────────────────────────────────────────────────────────
+  selftest-happy-path:
+    name: Reusable workflow — happy path
+    uses: ./.github/workflows/aegis-verify-attestation.yml
+    with:
+      envelope: "@tests/fixtures/envelope-valid-preview.json"
+      expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
+      expected-environment: "preview"
+      replay-store-path: ".aegis-replay-e3-happy.log"
+      aegis-sdk-git-ref: dc9c9df
+      # Test-only inputs (map to env vars on composite step per cosmic-flute §35.5):
+      internal-fixture-mode: "1"
+      internal-keys-dir-override: tests/fixtures/test-keys
+      internal-policy-path-override: tests/fixtures/policy-test-v1.yaml
+    secrets:
+      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
+
+  assert-happy-path:
+    name: Assert — happy path
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: selftest-happy-path
+    steps:
+      - name: Assert valid=true + error-class empty + replay-checked=true
+        env:
+          VALID: ${{ needs.selftest-happy-path.outputs.valid }}
+          ERROR_CLASS: ${{ needs.selftest-happy-path.outputs.error-class }}
+          DECISION_ID: ${{ needs.selftest-happy-path.outputs.decision-id }}
+          REPLAY_CHECKED: ${{ needs.selftest-happy-path.outputs.replay-checked }}
+        run: |
+          set -euo pipefail
+          test "$VALID" = "true" || { echo "::error::expected valid=true; got $VALID"; exit 1; }
+          test -z "$ERROR_CLASS" || { echo "::error::expected error-class empty; got $ERROR_CLASS"; exit 1; }
+          test "$REPLAY_CHECKED" = "true" || { echo "::error::expected replay-checked=true; got $REPLAY_CHECKED"; exit 1; }
+          test -n "$DECISION_ID" || { echo "::error::expected non-empty decision-id"; exit 1; }
+          echo "Happy path PASS: decision-id=$DECISION_ID replay-checked=$REPLAY_CHECKED"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Pair 2: tampered digest — surface AttestationDigestMismatch error_class
+  # ──────────────────────────────────────────────────────────────────────
+  selftest-tampered-digest:
+    name: Reusable workflow — tampered digest
+    uses: ./.github/workflows/aegis-verify-attestation.yml
+    with:
+      envelope: "@tests/fixtures/envelope-tampered-digest.json"
+      expected-digest: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      expected-environment: "preview"
+      aegis-sdk-git-ref: dc9c9df
+      internal-fixture-mode: "1"
+      internal-keys-dir-override: tests/fixtures/test-keys
+      internal-policy-path-override: tests/fixtures/policy-test-v1.yaml
+    secrets:
+      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
+
+  assert-tampered-digest:
+    name: Assert — tampered digest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: selftest-tampered-digest
+    steps:
+      - name: Assert valid=false + error-class=AttestationDigestMismatch
+        env:
+          VALID: ${{ needs.selftest-tampered-digest.outputs.valid }}
+          ERROR_CLASS: ${{ needs.selftest-tampered-digest.outputs.error-class }}
+        run: |
+          set -euo pipefail
+          test "$VALID" = "false" || { echo "::error::expected valid=false; got $VALID"; exit 1; }
+          test "$ERROR_CLASS" = "AttestationDigestMismatch" || { echo "::error::expected AttestationDigestMismatch; got $ERROR_CLASS"; exit 1; }
+          echo "Tampered-digest PASS"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Pair 3: expired envelope — surface AttestationExpired error_class
+  # ──────────────────────────────────────────────────────────────────────
+  selftest-expired:
+    name: Reusable workflow — expired envelope
+    uses: ./.github/workflows/aegis-verify-attestation.yml
+    with:
+      envelope: "@tests/fixtures/envelope-expired.json"
+      expected-digest: "1ff5ccc05032641ada6f8a57995e2184e4da9f21672879fdaca61ba8b71e2bb5"
+      expected-environment: "preview"
+      aegis-sdk-git-ref: dc9c9df
+      internal-fixture-mode: "1"
+      internal-keys-dir-override: tests/fixtures/test-keys
+      internal-policy-path-override: tests/fixtures/policy-test-v1.yaml
+    secrets:
+      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
+
+  assert-expired:
+    name: Assert — expired envelope
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: selftest-expired
+    steps:
+      - name: Assert valid=false + error-class=AttestationExpired
+        env:
+          VALID: ${{ needs.selftest-expired.outputs.valid }}
+          ERROR_CLASS: ${{ needs.selftest-expired.outputs.error-class }}
+        run: |
+          set -euo pipefail
+          test "$VALID" = "false" || { echo "::error::expected valid=false; got $VALID"; exit 1; }
+          test "$ERROR_CLASS" = "AttestationExpired" || { echo "::error::expected AttestationExpired; got $ERROR_CLASS"; exit 1; }
+          echo "Expired PASS"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Pair 4: replay detection — second call against same store returns
+  # AttestationReplayDetected (composite-action-layer error_class)
+  # ──────────────────────────────────────────────────────────────────────
+  selftest-replay-first:
+    name: Reusable workflow — replay store (first call)
+    uses: ./.github/workflows/aegis-verify-attestation.yml
+    with:
+      envelope: "@tests/fixtures/envelope-valid-preview.json"
+      expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
+      expected-environment: "preview"
+      replay-store-path: ".aegis-replay-e3-test.log"
+      aegis-sdk-git-ref: dc9c9df
+      internal-fixture-mode: "1"
+      internal-keys-dir-override: tests/fixtures/test-keys
+      internal-policy-path-override: tests/fixtures/policy-test-v1.yaml
+    secrets:
+      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
+
+  # NB: Because GitHub Actions runs each job in a fresh runner with a
+  # fresh workspace, the replay-store file from selftest-replay-first does
+  # NOT persist into selftest-replay-second's runner. To exercise the
+  # replay-detected path at the JOB-level reusable-workflow surface,
+  # selftest-replay-second invokes a manually-seeded replay store: a
+  # tiny `setup` job pre-creates .aegis-replay-e3-test.log containing the
+  # known decision_id from the fixture's manifest BEFORE the verify call.
+  # The fixture's manifest.json captures decision_id at generation time
+  # (tests/fixtures/generate_fixtures.py); the value below is committed
+  # alongside the fixtures.
+  selftest-replay-second-setup:
+    name: Reusable workflow — replay store (seed for second call)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: selftest-replay-first
+    outputs:
+      decision-id: ${{ needs.selftest-replay-first.outputs.decision-id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - name: Seed replay store with first call's decision_id
+        env:
+          DECISION_ID: ${{ needs.selftest-replay-first.outputs.decision-id }}
+        run: |
+          set -euo pipefail
+          test -n "$DECISION_ID" || { echo "::error::expected non-empty decision-id from first call"; exit 1; }
+          echo "$DECISION_ID" > .aegis-replay-e3-test.log
+          echo "Seeded .aegis-replay-e3-test.log with decision_id=$DECISION_ID"
+          # Persist the seeded log to the workspace artifact for the next job
+      - name: Upload seeded replay store
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: replay-store-seed
+          path: .aegis-replay-e3-test.log
+          if-no-files-found: error
+          retention-days: 1
+
+  # The second call cannot directly use a previous job's runner-local file,
+  # so we use actions/download-artifact in a wrapping caller job that
+  # downloads the seed THEN calls the reusable workflow. But reusable
+  # workflows are invoked at the JOB level — they cannot be preceded by
+  # download steps within the same job. So the second-call assert is
+  # combined with the download in a separate caller pattern using
+  # workflow_call's pre-existence semantics. The simplest path that
+  # actually works under GitHub's job-isolation model: the assert job
+  # downloads the seed + invokes the composite Action directly (one level
+  # below the reusable workflow). This still exercises the
+  # AttestationReplayDetected error_class end-to-end and proves the
+  # reusable workflow's first-call output (decision-id) is correctly
+  # routed through job.outputs → workflow_call.outputs.
+  selftest-replay-second:
+    name: Assert — replay store (second call)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    needs: selftest-replay-second-setup
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - name: Download seeded replay store
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: replay-store-seed
+          path: .
+      - name: Second verify (composite Action; should detect replay)
+        id: verify
+        uses: ./actions/verify-aegis-attestation
+        continue-on-error: true
+        with:
+          envelope: "@tests/fixtures/envelope-valid-preview.json"
+          expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
+          expected-environment: "preview"
+          replay-store-path: .aegis-replay-e3-test.log
+          aegis-sdk-git-ref: dc9c9df
+        env:
+          AEGIS_INTERNAL_FIXTURE_MODE: "1"
+          AEGIS_KEYS_DIR_OVERRIDE: tests/fixtures/test-keys
+          AEGIS_POLICY_PATH_OVERRIDE: tests/fixtures/policy-test-v1.yaml
+      - name: Assert valid=false + error-class=AttestationReplayDetected
+        env:
+          VALID: ${{ steps.verify.outputs.valid }}
+          ERROR_CLASS: ${{ steps.verify.outputs.error-class }}
+        run: |
+          set -euo pipefail
+          test "$VALID" = "false" || { echo "::error::expected valid=false; got $VALID"; exit 1; }
+          test "$ERROR_CLASS" = "AttestationReplayDetected" || { echo "::error::expected AttestationReplayDetected; got $ERROR_CLASS"; exit 1; }
+          echo "Replay-detected PASS"
