@@ -48,10 +48,10 @@ Both surfaces exist for a reason. Pick based on consumer ergonomics.
 | Concern | Composite Action (E2) | Reusable workflow (E3, this file) |
 |---|---|---|
 | Invocation level | Step (`uses:` inside `steps:`) | Job (`uses:` inside `jobs:`) |
-| Caller controls `runs-on` | YES (caller's job sets it) | NO (workflow's job sets it; `runs-on` is an input with default `blacksmith-4vcpu-ubuntu-2404`) |
+| Caller controls `runs-on` | YES (caller's job sets it freely, per-job) | YES via the `runs-on` input (default `blacksmith-4vcpu-ubuntu-2404`); fixed for the entire reusable-workflow invocation — cannot vary mid-job |
 | Caller orchestrates Python setup + checkout | YES (caller invokes `actions/setup-python` first) | NO (workflow handles it internally) |
 | Best when | You want to splice verify into an existing job between custom build/test/deploy steps | You want verify as a separate job with `needs:` chain — simpler consumer surface |
-| Industry precedent | SLSA `slsa-installer` (Go binary installer) | SLSA `generator_generic_slsa3.yml` (the canonical reusable workflow most consumers invoke) |
+| Industry precedent | SLSA `slsa-verifier/actions/installer` (the installer Action that vendors the slsa-verifier Go binary) | SLSA `generator_generic_slsa3.yml` (the canonical reusable workflow most consumers invoke) |
 | Test fixture overrides | Set env on the step: `env: AEGIS_INTERNAL_FIXTURE_MODE: "1"` | Pass test-only inputs: `with: internal-fixture-mode: "1"` — workflow maps to env |
 
 **Recommendation**: most new consumer repos should use the reusable workflow (this file). It's a smaller consumer surface — three required inputs + `needs:` chain. The composite Action is the right choice when you're already inside a job that does build + verify + deploy in a tight step sequence, or when you need control over `runs-on`.
@@ -312,4 +312,4 @@ The reusable workflow adds no NEW versioning surface — it's a thin orchestrati
 - `actions/verify-aegis-attestation/README.md` — composite Action consumer docs (includes the full 19-string error_class taxonomy)
 - `.github/workflows/aegis-verify-attestation.yml` — this workflow's source
 - `.github/workflows/e3-workflow-selftest.yml` — `workflow_dispatch:` self-test for this workflow
-- [SLSA-framework BYOB pattern](https://slsa.dev/spec/v1.0/use-cases-build-tool-reusable-workflow) — the architectural analog (Tool Reusable Workflow wraps Tool Callback Action)
+- [SLSA-framework BYOB pattern](https://github.com/slsa-framework/slsa-github-generator/blob/main/BYOB.md) — the architectural analog (Tool Reusable Workflow wraps Tool Callback Action)

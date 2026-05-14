@@ -39,7 +39,7 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 - Cosmic-flute §34.17: Sprint 5/E2 ship capture + sole-keyholder merge pattern
 - ADR-001 §Decision: trust model + SHA-pinning + consumer-owned replay-detection responsibility
 - Upstream ADR-011: hybrid envelope spec + verifier-statelessness
-- SLSA-framework BYOB pattern: <https://slsa.dev/spec/v1.0/use-cases-build-tool-reusable-workflow>
+- SLSA-framework BYOB pattern: <https://github.com/slsa-framework/slsa-github-generator/blob/main/BYOB.md>
 
 ---
 

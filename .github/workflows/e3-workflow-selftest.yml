@@ -92,6 +92,17 @@ jobs:
     name: Assert — tampered digest
     runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: selftest-tampered-digest
+    # The composite Action's scripts/verify_action.py exits 1 when valid=false
+    # — this propagates up through the reusable workflow's `verify` job, marking
+    # the upstream `selftest-tampered-digest` invocation as FAILED at the
+    # GitHub-Actions-job level. Without `if: !cancelled()`, this assert job
+    # would SKIP (default behavior when an upstream job fails), masking whether
+    # the AEGIS-taxonomy error_class actually surfaced. Reusable-workflow
+    # invocations CANNOT use STEP-level `continue-on-error: true` (GH limit;
+    # /quality-gate Phase 2 bug-hunt F4), so the alternative is `if:
+    # !cancelled()` on assert jobs that gate on expected-FAILURE outputs.
+    # Job-level `outputs:` flow through even on upstream-job failure.
+    if: ${{ !cancelled() }}
     steps:
       - name: Assert valid=false + error-class=AttestationDigestMismatch
         env:
@@ -124,6 +135,10 @@ jobs:
     name: Assert — expired envelope
     runs-on: blacksmith-4vcpu-ubuntu-2404
     needs: selftest-expired
+    # See assert-tampered-digest above — same rationale: composite exit-1 on
+    # valid=false propagates to reusable workflow job FAIL; `if: !cancelled()`
+    # ensures this assert runs against the upstream's flow-through outputs.
+    if: ${{ !cancelled() }}
     steps:
       - name: Assert valid=false + error-class=AttestationExpired
         env:
@@ -156,14 +171,26 @@ jobs:
 
   # NB: Because GitHub Actions runs each job in a fresh runner with a
   # fresh workspace, the replay-store file from selftest-replay-first does
-  # NOT persist into selftest-replay-second's runner. To exercise the
-  # replay-detected path at the JOB-level reusable-workflow surface,
-  # selftest-replay-second invokes a manually-seeded replay store: a
-  # tiny `setup` job pre-creates .aegis-replay-e3-test.log containing the
-  # known decision_id from the fixture's manifest BEFORE the verify call.
-  # The fixture's manifest.json captures decision_id at generation time
-  # (tests/fixtures/generate_fixtures.py); the value below is committed
-  # alongside the fixtures.
+  # NOT persist into selftest-replay-second's runner. We seed it across
+  # the job boundary via actions/upload-artifact + actions/download-artifact
+  # using the decision-id flowed through from selftest-replay-first's
+  # reusable-workflow outputs (NOT a fixture-committed value — the live
+  # output proves the workflow_call output indirection works end-to-end).
+  #
+  # COVERAGE GAP (documented per /quality-gate Phase 2 bug-hunt F5):
+  # Pair 4 verifies the reusable workflow's decision-id passthrough +
+  # the AttestationReplayDetected error_class via the composite Action
+  # directly (one level below the reusable workflow). The reusable
+  # workflow's `replay-store-path` input → composite env propagation
+  # IS exercised indirectly (the composite delegates from the reusable
+  # workflow on the first call, which writes the seed). But the
+  # reusable-workflow surface for AttestationReplayDetected itself —
+  # i.e., a SECOND `uses: ./.github/workflows/aegis-verify-attestation.yml`
+  # invocation that yields valid=false + AttestationReplayDetected — is
+  # NOT directly exercised, because GitHub job isolation prevents
+  # pre-seeding the inner runner's workspace before the reusable
+  # workflow invokes its `verify` job. The composite Action is the
+  # same code path either way, so the indirect coverage is acceptable.
   selftest-replay-second-setup:
     name: Reusable workflow — replay store (seed for second call)
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -191,14 +218,10 @@ jobs:
           retention-days: 1
 
   # The second call cannot directly use a previous job's runner-local file,
-  # so we use actions/download-artifact in a wrapping caller job that
-  # downloads the seed THEN calls the reusable workflow. But reusable
-  # workflows are invoked at the JOB level — they cannot be preceded by
-  # download steps within the same job. So the second-call assert is
-  # combined with the download in a separate caller pattern using
-  # workflow_call's pre-existence semantics. The simplest path that
-  # actually works under GitHub's job-isolation model: the assert job
-  # downloads the seed + invokes the composite Action directly (one level
+  # AND reusable workflows are invoked at the JOB level — they cannot be
+  # preceded by download steps within the same job. The path that works
+  # under GitHub's job-isolation model: a separate caller job downloads
+  # the seeded artifact + invokes the composite Action DIRECTLY (one level
   # below the reusable workflow). This still exercises the
   # AttestationReplayDetected error_class end-to-end and proves the
   # reusable workflow's first-call output (decision-id) is correctly

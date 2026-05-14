@@ -167,17 +167,26 @@ jobs:
       replay-checked: ${{ steps.verify.outputs.replay-checked }}
     steps:
       - name: Checkout aegis-policy at the pinned SHA
-        # github.event.workflow.ref resolves to the caller's `@<sha>` pin
-        # on the reusable workflow's `uses:` line. This ensures the
-        # composite Action checked out below matches byte-for-byte the
-        # ref the caller pinned — critical because the public-key
-        # fingerprints in policy/verifier-policy-v1.yaml MUST match the
-        # bytes in keys/, and a mismatched ref would invalidate the
-        # runtime fingerprint cross-check in scripts/verify_action.py.
+        # github.workflow_sha resolves to the commit SHA of THIS reusable
+        # workflow file at execution time — for `uses: <repo>/.github/
+        # workflows/X.yml@<sha>` invocations, that's exactly the `<sha>`
+        # the caller pinned (verified against official GitHub Actions
+        # context-reference docs 2026-05-13). This ensures the composite
+        # Action checked out below matches byte-for-byte the ref the
+        # caller pinned — critical because the public-key fingerprints
+        # in policy/verifier-policy-v1.yaml MUST match the bytes in
+        # keys/, and a mismatched ref would invalidate the runtime
+        # fingerprint cross-check in scripts/verify_action.py.
+        #
+        # Note: an earlier plan-time draft used `github.event.workflow.ref`
+        # — that is NOT a documented context variable for workflow_call
+        # invocations; it evaluates to empty string, causing actions/
+        # checkout to fall back to the named repository's default branch
+        # (NOT the caller-pinned SHA). Bug-hunt F1/F2 caught this.
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
           repository: undercurrentai/aegis-policy
-          ref: ${{ github.event.workflow.ref }}
+          ref: ${{ github.workflow_sha }}
           path: aegis-policy
 
       - name: Verify attestation (delegate to composite action)
