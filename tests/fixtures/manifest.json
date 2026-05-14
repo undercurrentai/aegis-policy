@@ -1,0 +1,33 @@
+{
+  "generated_by": "tests/fixtures/generate_fixtures.py",
+  "fingerprints": {
+    "ed25519": "ff15bbda193e6c5b4137181bffdb35d0c226841f9b31a8ca81f3ea227d333b88",
+    "mldsa65": "52341bdb0962c55315b5a6f38a0dc1fb6912f6a126a011aa40879e642cb73c66"
+  },
+  "keyids": {
+    "ed25519": "ed25519:ff15bbda193e6c5b",
+    "mldsa65": "ml-dsa-65:52341bdb0962c553"
+  },
+  "envelope_valid_preview": {
+    "path": "envelope-valid-preview.json",
+    "decision_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "artifact_digest": "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89",
+    "environment": "preview",
+    "policy_version": "2.1.0"
+  },
+  "envelope_tampered_digest": {
+    "path": "envelope-tampered-digest.json",
+    "decision_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "original_artifact_digest": "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89",
+    "tampered_expected_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "environment": "preview",
+    "policy_version": "2.1.0"
+  },
+  "envelope_expired": {
+    "path": "envelope-expired.json",
+    "decision_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    "artifact_digest": "1ff5ccc05032641ada6f8a57995e2184e4da9f21672879fdaca61ba8b71e2bb5",
+    "environment": "preview",
+    "policy_version": "2.1.0"
+  }
+}

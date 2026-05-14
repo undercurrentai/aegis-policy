@@ -9,7 +9,7 @@
 # Version tracking: see policy/CHANGELOG.md (independent of repo-level CHANGELOG)
 # Schema reference: schema/attestation_predicate_v1.yaml (vendored from aegis-governance@7e422b2)
 
-policy_version: "2.0.0"
+policy_version: "2.1.0"
 spec_uri: "https://aegis.undercurrentholdings.com/policy/verifier/v1"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -136,6 +136,37 @@ fail_closed_on:
 # file's policy_version exactly. Future versions may relax to semver-major-equal
 # if churn justifies it. Enforcement happens in the E2 verifier kit, not at E1.
 policy_version_compatibility: "strict-equal"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Replay-detection contract (added v2.1.0 — Sprint 5/E2 task #119)
+# ─────────────────────────────────────────────────────────────────────────────
+# Per ADR-001 §"Consumer-owned replay-detection responsibility" + upstream
+# aegis-governance ADR-011 §"Verifier statelessness". AEGIS verifier
+# (server-side /attestations/verify + SDK offline verify_attestation_locally)
+# is STATELESS by design. Replay detection is consumer-owned.
+#
+# This block is a CONTRACT, not a fail_closed_on entry. The composite-action-
+# layer emits `AttestationReplayDetected` when replay-store-path is set and
+# decision_id is found duplicate — that string lives in the action README,
+# NOT in fail_closed_on (preserves SDK ↔ policy parity invariant at 15 vs 15).
+replay_detection:
+  policy: "consumer-owned"
+  mechanism_primary: "decision-id-uniqueness"    # all risk classes
+  mechanism_secondary: "nonce-uniqueness"        # high/critical risk_class (nonce always present)
+  enforcement_layer: "consumer-ci-workflow"       # NOT server-side; NOT in SDK
+  recommended_stores:
+    - "append-only file (e.g., .github/.aegis-replay.log committed to consumer repo)"
+    - "DB unique constraint on (decision_id) or (nonce)"
+    - "Redis SETNX with TTL aligned to predicate.governance.expires_at"
+  composite_action_support:
+    action_ref: "undercurrentai/aegis-policy/actions/verify-aegis-attestation@<sha>"
+    input: "replay-store-path"
+    behavior_when_unset: "step emits ::warning:: + verify proceeds; consumer must implement detection externally"
+    behavior_when_set: "action consults the path, appends decision_id on success, fails with AttestationReplayDetected on duplicate"
+  references:
+    adr_001: "docs/architecture/adr/ADR-001-repo-trust-model.md"
+    adr_011_upstream: "https://github.com/undercurrentai/aegis-governance/blob/main/docs/architecture/adr/ADR-011-artifact-bound-aegis-attestations.md"
+    cosmic_flute: "internal: ~/.claude/plans/let-s-plan-this-cosmic-flute.md §34"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # References

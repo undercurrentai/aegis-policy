@@ -6,6 +6,68 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 
 ---
 
+## [1.1.0] — 2026-05-13
+
+**Sprint 5/E2 ship** — closes cosmic-flute task #119 (consumer-owned replay-detection contract) + task #28 (composite GitHub Action).
+
+### Added
+
+- **`policy/verifier-policy-v1.yaml replay_detection:` block** (companion `policy_version` bump 2.0.0 → 2.1.0). Documents the consumer-owned replay-detection contract: AEGIS verifier (server-side `/attestations/verify` + SDK offline `verify_attestation_locally`) is STATELESS by design per upstream ADR-011 §"Verifier statelessness"; replay detection is consumer-owned. The block declares: policy (`consumer-owned`); primary mechanism (`decision-id-uniqueness`); secondary mechanism (`nonce-uniqueness` for high/critical); 3 recommended consumer stores; composite-action support metadata (the `replay-store-path` input + emit-`AttestationReplayDetected`-on-duplicate behavior).
+- **ADR-001 §"Consumer-owned replay-detection responsibility"** subsection under §Decision. Explains the responsibility split + implementation guidance + how the composite Action's `replay-store-path` input provides built-in append-only-file support.
+- **`actions/verify-aegis-attestation/action.yml`** (composite GitHub Action). Inputs: `envelope`, `expected-digest`, `expected-environment`, optional `policy-version-expected` / `replay-store-path` / `python-version` / `aegis-sdk-version` / `aegis-sdk-git-ref`. Outputs: 9 fields including `valid`, `error-class` (AEGIS taxonomy), `decision-id`, `nonce`, `replay-checked`. Composite steps: setup-python → install `aegis-sdk[verify]` → run `scripts/verify_action.py`. Consumers pin by immutable commit SHA: `uses: undercurrentai/aegis-policy/actions/verify-aegis-attestation@<sha>`.
+- **`actions/verify-aegis-attestation/README.md`** — consumer-facing docs: TL;DR, full inputs/outputs tables, installation source (Git ref fallback while task #59 PyPI publish pending), 19-string error_class taxonomy table (15 verifier-layer + 4 composite-action-layer), replay-detection mechanics, minimal + risk-class-gating examples, SHA-pinning expectations, versioning.
+- **`scripts/verify_action.py`** — Python entry-point (~440 LOC). Pins keys from `keys/`, parses policy, runs runtime fingerprint cross-check (DiD: catches key-vs-policy drift across cached runner action checkouts), parses envelope (inline or `@path`), calls `aegis-sdk.verify_attestation_locally`, extracts predicate for output + enforces `policy_version` strict-equal (per upstream ADR-011 N3), optionally consults consumer-owned replay store (append-only file mechanism). Supports `AEGIS_KEYS_DIR_OVERRIDE` + `AEGIS_POLICY_PATH_OVERRIDE` env vars for self-test fixture isolation.
+- **`tests/fixtures/generate_fixtures.py`** — one-shot offline generator (idempotent re-runnable). Produces ephemeral Ed25519 + ML-DSA-65 keypair (NOT production keys) + test-policy with matching fingerprints + 3 envelope fixtures (valid-preview / tampered-digest / expired) + manifest.json with digests + decision_ids. Mirrors aegis-sdk wire format byte-for-byte (RFC 8785 canonical JSON + DSSE PAE + uniform `H(CONTEXT_STRING ‖ PAE) → ML-DSA-65/Ed25519` per upstream ADR-012).
+- **`tests/test_verify_action.py`** — 12 unit tests (TestEndToEnd × 4 happy/tampered/expired/replay + TestKeyFingerprint + TestPolicyVersion + TestEnvelopeShape × 2 + TestEnvelopeParsing × 2 + TestOutputEmission + TestWarningOnNoReplayStore). Subprocess-isolated; exercise scripts/verify_action.py end-to-end against committed fixtures. 12/12 PASS locally on 2026-05-13.
+- **`.github/workflows/e2-action-selftest.yml`** — `workflow_dispatch:` self-test workflow with 5 jobs (unit-tests + 4 composite-action invocations: happy / tampered-digest / expired / replay-detected). Activation path post-task-#59 PyPI publish documented in workflow header.
+
+### Changed
+
+- **`policy/verifier-policy-v1.yaml`**: `policy_version` 2.0.0 → 2.1.0 (MINOR — additive `replay_detection:` block only; `fail_closed_on:` unchanged at 15 entries). Existing v2.0.0 consumers continue to function; replay-detection support is opt-in via `replay-store-path` input on the new composite action.
+- **`policy/CHANGELOG.md [2.1.0]`** — additive contract field documented; migration steps for consumers wanting replay detection.
+- **`policy/PROVENANCE.md`** — `replay_detection` row added; v2.1.0 vendoring source row (SDK unchanged at `aegis-governance@dc9c9df`).
+- **`docs/roadmap.md`**: Sprint 5/E1.5 row → ✅ shipped 2026-05-12 (per cosmic-flute §32); Sprint 5/E2 row → 🟡 in-progress (this PR) with corrected scope description (cosign-signed kit container release was incorrectly listed under E2 — that's Phase 2 ecosystem-compat per cosmic-flute §34.13 OOS).
+
+### Notes
+
+- **4 composite-action-layer error_classes** (`AttestationKeyFingerprintMismatch`, `AttestationEnvelopeShapeInvalid`, `AttestationPolicyVersionMismatch`, `AttestationReplayDetected`) are INTENTIONALLY OMITTED from `policy/verifier-policy-v1.yaml fail_closed_on`. They live in the action README (`actions/verify-aegis-attestation/README.md §Error classes`) since they're enforced at the action layer, not the verifier layer. This preserves the SDK ↔ policy parity invariant (`error-class-parity.yml` CI gate stays GREEN at 15 vs 15 entries without requiring an SDK re-vendor).
+- **Self-test workflow `workflow_dispatch:`-only at v1.1.0**. Adds `pull_request:` trigger once task #59 (aegis-sdk PyPI publish) lands OR a `AEGIS_SDK_FETCH_TOKEN` secret is configured in repo settings.
+- **Sprint 5/E3 reusable workflow (task #29)** deferred — wraps this composite for `workflow_call:` consumers.
+
+### Quality-gate hardening (Phase 2 + Phase 3 remediations)
+
+Pre-ship `/quality-gate` 9-phase exhaustive run remediated 11 findings + added 8 regression tests:
+
+- **`tests/conftest.py`** (NEW): session-scoped `autouse` fixture that runs `tests/fixtures/generate_fixtures.py` on cold checkouts if `manifest.json` is missing. Closes Phase 2 Agent 1 F2 (pytest collection failure on fresh-clone state).
+- **`tests/fixtures/generate_fixtures.py`**: fixture envelope now emits `payloadType` (camelCase) per in-toto + DSSE v1 JSON wire format. Closes Phase 2 Agent 1 F1 — the prior `payload_type` (snake_case) was silently accepted by SDK's default-fallback in `DSSEEnvelope.from_response`, masking the wire-format contract.
+- **`scripts/verify_action.py`**:
+  - `AEGIS_INTERNAL_FIXTURE_MODE=1` sentinel gates `AEGIS_KEYS_DIR_OVERRIDE` + `AEGIS_POLICY_PATH_OVERRIDE` env vars. Closes Phase 3 ultrathink probe 4 — defense-in-depth against compromised prior steps in consumer workflows that could `echo "AEGIS_KEYS_DIR_OVERRIDE=./malicious" >> $GITHUB_ENV`. Production consumers NEVER set the sentinel; overrides silently ignored.
+  - Replay-store I/O failure now emits `replay-checked=false` (was `true`). Closes Phase 2 Agent 1 F4 — the prior `true` would falsely tell consumers the audit trail is durable when an append failed.
+  - `AEGIS_EXPECTED_DIGEST` format-validated (64-char lowercase hex). Closes Phase 2 Agent 1 F7.
+  - Envelope-parse except adds `UnicodeDecodeError` (alongside JSON/FileNotFound/OS). Closes Phase 2 Agent 1 F6 — binary `@path` no longer crashes the action.
+- **`tests/test_verify_action.py`**:
+  - Subprocess env-strip extended to `GITHUB_*` (was `AEGIS_*` only). Closes Phase 2 Agent 1 F5 — parent process's stale `GITHUB_OUTPUT` / `GITHUB_WORKSPACE` no longer leak.
+  - Cycle 2 hardening: `test_subprocess_isolates_inherited_github_output` now calls `_run_verify(github_output_path=None)` so the strip is the only defense — proven by empirical sed-revert smoke that the test fails with `KeyError 'valid'` if the strip is removed.
+  - 8 cumulative regression tests added (`TestPhase2Regression` × 7 + sentinel gate × 1) — `test_fixture_envelope_uses_camelcase_payloadType_key`, `test_malformed_expected_digest_rejected`, `test_short_expected_digest_rejected`, `test_binary_at_path_envelope_input_rejected`, `test_subprocess_isolates_inherited_github_output`, `test_replay_store_write_failure_marks_replay_unchecked`, `test_override_env_vars_ignored_without_fixture_mode_sentinel`.
+- **`actions/verify-aegis-attestation/README.md`**:
+  - Worked example replaced `${{ steps.X.outputs.Y }}` interpolation in `run:` block with `env:` propagation pattern per [GitHub Security Lab](https://securitylab.github.com/resources/github-actions-untrusted-input) + CodeQL `actions-code-injection-medium`. Closes Phase 2 Agent 2 F1 (the prior snippet taught consumers a known-bad pattern).
+  - Replay-detection section adds 4 sub-sections: workspace-relative AND absolute path support; Concurrency caveat (TOCTOU under matrix builds / `workflow_call` fan-out); Retention guidance (consumer GCs); Store-write failure semantics. Closes Phase 2 Agent 2 F3.
+  - `actions/checkout@v6` example bumped to SHA-pin `de0fac2e…` (was tag-pin contradicting our own SHA-pinning guidance). Closes Phase 2 Agent 2 F6.
+  - SHA-pinning section adds "Transitive pins" bullet noting `actions/setup-python@a309ff8b…` (v6) inner pin. Closes Phase 2 Agent 2 F5.
+- **`docs/architecture/adr/ADR-001-repo-trust-model.md` §"Consumer-owned replay-detection responsibility"**: implementation guidance reframed from mutually-exclusive (`For high/critical: nonce; For low/medium: decision_id`) to additive (`Primary mechanism (all classes): decision_id-uniqueness; Additional mechanism for high/critical: nonce on top`). Matches `policy/verifier-policy-v1.yaml replay_detection.mechanism_primary` + `mechanism_secondary`. Closes Phase 2 Agent 2 F2.
+- **`.github/workflows/e2-action-selftest.yml`**: removed `needs: unit-tests` from all 4 action-invocation jobs. They now run in parallel. Closes Phase 2 Agent 2 F4. Each job's env block adds `AEGIS_INTERNAL_FIXTURE_MODE: "1"` sentinel for the Phase 3 P4 fix.
+
+Total: 11 findings remediated (Phase 2 cycle 1 × 9 + Phase 2 cycle 2 × 1 + Phase 3 ultrathink × 1) + 4 LOWs (UnicodeDecodeError, digest-format-validation, transitive pin docs, checkout SHA-pin); 8 regression tests added cumulative; final pytest 20/20 PASS, error-class parity 15-vs-15, fingerprint parity 2-vs-2, YAML parse 10/10, yamllint relaxed exit 0, markdownlint-cli2 0 errors.
+
+### Upstream references
+
+- Cosmic-flute plan §34: `~/.claude/plans/let-s-plan-this-cosmic-flute.md`
+- ADR-001 §Decision §"Consumer-owned replay-detection responsibility" (this repo, updated in this PR)
+- Upstream ADR-011 §"Verifier statelessness": `aegis-governance@dc9c9df:docs/architecture/adr/ADR-011-artifact-bound-aegis-attestations.md`
+- Vendored SDK source: `aegis-governance@dc9c9df:aegis-sdk/src/aegis/_verify_local.py` (unchanged from v2.0.0 — `replay_detection:` is a contract-only addition; no SDK code change)
+
+---
+
 ## [1.0.0] — 2026-05-10
 
 Sprint 5/E1.5 Phase 5 ship. Repo graduates from `0.x` bootstrap series to `1.x` stable series — the canonical verifier-policy + trust roots are now production-derived (not placeholder).

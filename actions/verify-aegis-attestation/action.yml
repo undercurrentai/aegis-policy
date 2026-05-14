@@ -1,0 +1,144 @@
+# Sprint 5/E2 composite Action — verify an AEGIS attestation envelope offline.
+#
+# Wraps `aegis-sdk[verify].verify_attestation_locally()` with:
+#   - canonical key bytes pinned at `keys/{ed25519-public.pem, mldsa65-public.bin}`
+#   - canonical policy at `policy/verifier-policy-v1.yaml`
+#   - runtime fingerprint cross-check (DiD: catches key-vs-policy drift the
+#     parity gate might miss)
+#   - policy_version strict-equal check (per upstream ADR-011 N3)
+#   - optional consumer-owned replay-detection via `replay-store-path` input
+#     (per policy/verifier-policy-v1.yaml replay_detection block + ADR-001
+#     §"Consumer-owned replay-detection responsibility")
+#
+# Consumers MUST pin by immutable commit SHA, never @main or a tag:
+#   uses: undercurrentai/aegis-policy/actions/verify-aegis-attestation@<sha>
+#
+# See actions/verify-aegis-attestation/README.md for full consumer docs.
+
+name: "Verify AEGIS Attestation"
+description: "Offline cryptographic verification of an AEGIS hybrid Ed25519+ML-DSA-65 attestation envelope. Pins keys + policy from this repo; emits AEGIS-taxonomy error_class on failure."
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  envelope:
+    description: "DSSE envelope JSON. Either inline JSON string OR `@path/to/file.json` (the `@` prefix triggers file read; path is workspace-relative)."
+    required: true
+
+  expected-digest:
+    description: "Expected SHA-256 hex (64 lowercase chars) of the subject artifact. Compared byte-exactly against envelope.predicate.subject[0].digest.sha256."
+    required: true
+
+  expected-environment:
+    description: "Expected attestation environment. One of: production | staging | preview. Compared against envelope.predicate.governance.environment."
+    required: true
+
+  policy-version-expected:
+    description: "Optional strict-equal check against envelope.predicate.governance.policy_version. If empty, reads from this repo's policy/verifier-policy-v1.yaml policy_version field (currently 2.1.0)."
+    required: false
+    default: ""
+
+  replay-store-path:
+    description: "Optional workspace-relative path to an append-only replay-detection file. When set, action consults the file + appends decision_id on success; fails with AttestationReplayDetected on duplicate. When unset, emits ::warning:: + verifies anyway (consumer must implement replay detection externally). See policy/verifier-policy-v1.yaml replay_detection block."
+    required: false
+    default: ""
+
+  python-version:
+    description: "Python version for setup-python. Default matches portfolio convention."
+    required: false
+    default: "3.13"
+
+  aegis-sdk-version:
+    description: "PyPI version pin for aegis-governance[verify] SDK. Used when aegis-sdk-git-ref is empty. Until AU-N-1 (task #59 PyPI publish) lands, set aegis-sdk-git-ref to a commit SHA instead."
+    required: false
+    default: "1.0.0"
+
+  aegis-sdk-git-ref:
+    description: "Optional Git ref (commit SHA / tag / branch) to install aegis-sdk from. When set, overrides aegis-sdk-version. Format: 'pip install git+https://github.com/undercurrentai/aegis-governance@<ref>#subdirectory=aegis-sdk[verify]'. Requires the consumer workflow to have read access to aegis-governance (private until AU-N-1 lands)."
+    required: false
+    default: ""
+
+outputs:
+  valid:
+    description: "true | false — overall verification outcome."
+    value: ${{ steps.verify.outputs.valid }}
+
+  error-class:
+    description: "Empty on success. On failure: one of the 15 verifier-layer error_class strings from policy/verifier-policy-v1.yaml fail_closed_on, OR one of the 4 composite-action-layer strings (AttestationKeyFingerprintMismatch, AttestationPolicyVersionMismatch, AttestationReplayDetected, AttestationEnvelopeShapeInvalid). See README §Error classes."
+    value: ${{ steps.verify.outputs.error-class }}
+
+  decision-id:
+    description: "envelope.predicate.governance.decision_id — UUID (lowercase 36 chars)."
+    value: ${{ steps.verify.outputs.decision-id }}
+
+  artifact-digest:
+    description: "envelope.predicate.governance.artifact_digest — echoed for downstream consumer logging."
+    value: ${{ steps.verify.outputs.artifact-digest }}
+
+  environment:
+    description: "envelope.predicate.governance.environment — echoed."
+    value: ${{ steps.verify.outputs.environment }}
+
+  policy-version:
+    description: "envelope.predicate.governance.policy_version — echoed."
+    value: ${{ steps.verify.outputs.policy-version }}
+
+  expires-at:
+    description: "envelope.predicate.governance.expires_at — ISO 8601 UTC."
+    value: ${{ steps.verify.outputs.expires-at }}
+
+  nonce:
+    description: "envelope.predicate.governance.nonce — base64 (empty for low/medium risk_class)."
+    value: ${{ steps.verify.outputs.nonce }}
+
+  replay-checked:
+    description: "true if replay-store-path was set and check ran. false otherwise (action emitted ::warning::)."
+    value: ${{ steps.verify.outputs.replay-checked }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install aegis-sdk[verify] + pyyaml
+      shell: bash
+      env:
+        AEGIS_SDK_VERSION: ${{ inputs.aegis-sdk-version }}
+        AEGIS_SDK_GIT_REF: ${{ inputs.aegis-sdk-git-ref }}
+      run: |
+        set -euo pipefail
+        python -m pip install --upgrade pip
+        if [[ -n "${AEGIS_SDK_GIT_REF}" ]]; then
+          echo "Installing aegis-sdk from Git ref: ${AEGIS_SDK_GIT_REF}"
+          pip install "git+https://github.com/undercurrentai/aegis-governance@${AEGIS_SDK_GIT_REF}#subdirectory=aegis-sdk[verify]"
+        else
+          echo "Installing aegis-governance[verify] from PyPI: ${AEGIS_SDK_VERSION}"
+          pip install "aegis-governance[verify]==${AEGIS_SDK_VERSION}"
+        fi
+        pip install pyyaml
+        # Smoke-import: catches packaging / SDK-availability drift early with a
+        # clear error message rather than a confusing ModuleNotFoundError in
+        # verify_action.py's main body.
+        python -c "from aegis import verify_attestation_locally, AttestationVerifyKey, DSSEEnvelope; print('aegis-sdk[verify] import OK')"
+
+    - name: Run verify_action.py
+      id: verify
+      shell: bash
+      env:
+        AEGIS_ENVELOPE: ${{ inputs.envelope }}
+        AEGIS_EXPECTED_DIGEST: ${{ inputs.expected-digest }}
+        AEGIS_EXPECTED_ENVIRONMENT: ${{ inputs.expected-environment }}
+        AEGIS_POLICY_VERSION_EXPECTED: ${{ inputs.policy-version-expected }}
+        AEGIS_REPLAY_STORE_PATH: ${{ inputs.replay-store-path }}
+        AEGIS_ACTION_PATH: ${{ github.action_path }}
+        # NOTE: GITHUB_OUTPUT + GITHUB_WORKSPACE are automatic context vars
+        # already in env; verify_action.py reads them directly.
+      run: |
+        set -euo pipefail
+        # github.action_path resolves to <runner_temp>/_actions/<owner>/<repo>/<ref>/actions/verify-aegis-attestation/
+        # scripts/, keys/, policy/ all live at <action_path>/../../
+        python "${AEGIS_ACTION_PATH}/../../scripts/verify_action.py"
