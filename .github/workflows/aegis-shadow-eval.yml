@@ -19,9 +19,17 @@ permissions:
 
 jobs:
   shadow-eval:
-    name: AEGIS Shadow Evaluation (advisory)
+    name: AEGIS Shadow Evaluation
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    continue-on-error: true  # advisory; never blocks merge
+    # NB: was advisory-only at Sprint 5/E1 design; promoted to REQUIRED via
+    # Sprint 5/E1.5 Phase 7 org-Ruleset `aegis-attestation-required-checks`
+    # (id 16294975). Check context must match the ruleset's required_status_checks
+    # entry "AEGIS Shadow Evaluation" exactly — the prior "(advisory)" suffix
+    # caused a check-name mismatch that blocked PR #5 admin-squash-merge until
+    # this rename. continue-on-error retained so a transient AEGIS API outage
+    # doesn't permanently block PRs; the ruleset's strict-required-checks
+    # policy will still require completion.
+    continue-on-error: true
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}  # skip on forks (no secret access)
     steps:
       - name: Checkout
