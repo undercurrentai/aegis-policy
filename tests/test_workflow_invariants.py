@@ -98,14 +98,28 @@ class TestSelftestWorkflowF4Regression:
             assert assert_job_name in jobs, f"{assert_job_name} missing"
             job = jobs[assert_job_name]
             if_clause = job.get("if", "")
-            # Must contain a known "run-anyway" expression so a failed upstream
-            # job doesn't cause this assert to skip
-            allowed_patterns = ("always()", "!cancelled()", "failure()", "success()")
-            assert any(p in if_clause for p in allowed_patterns), (
-                f"{assert_job_name} must declare `if:` with one of {allowed_patterns} "
+            # Must contain a known "run-on-upstream-fail" expression so a failed
+            # upstream job doesn't cause this assert to skip. Specifically:
+            #   - `always()`      → runs always (incl. cancellation)
+            #   - `!cancelled()`  → runs on success + failure, skips cancellation
+            #   - `failure()`     → runs only on failure
+            # `success()` is EXCLUDED — it would re-introduce the F4 bug
+            # (assert would skip on upstream FAILED, defeating the purpose).
+            # /quality-gate Phase 3 /ultrathink Probe 3 tightening.
+            run_on_fail_patterns = ("always()", "!cancelled()", "failure()")
+            assert any(p in if_clause for p in run_on_fail_patterns), (
+                f"{assert_job_name} must declare `if:` with one of {run_on_fail_patterns} "
                 f"so the assertion runs even when the upstream reusable-workflow "
                 f"invocation fails (composite exits 1 on valid=false). "
-                f"See /quality-gate Phase 2 bug-hunt finding F4. Got if={if_clause!r}."
+                f"See /quality-gate Phase 2 bug-hunt finding F4 + Phase 3 ultrathink "
+                f"Probe 3. Got if={if_clause!r}."
+            )
+            # Defensive: explicitly reject `success()` to prevent the F4
+            # regression "if: success()" pattern from passing this test.
+            assert "success()" not in if_clause, (
+                f"{assert_job_name} must NOT use `success()` in its `if:` clause — "
+                f"that would skip the assert when the upstream reusable-workflow "
+                f"invocation FAILS, defeating the F4 fix. Got if={if_clause!r}."
             )
 
     def test_replay_second_keeps_step_level_continue_on_error(self):
