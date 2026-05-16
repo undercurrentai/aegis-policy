@@ -15,4 +15,4 @@ PyYAML>=6.0
 # ML-DSA-65 raw bytes are already stored unwrapped in keys/mldsa65-public.bin
 # so no `cryptography` ML-DSA extraction is needed at gate time (the ASN.1
 # DER parse in scripts/extract_mldsa65_raw.py is only for key-rotation ops).
-cryptography>=42
+cryptography>=48.0.0
