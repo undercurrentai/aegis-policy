@@ -6,6 +6,68 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 
 ---
 
+## [1.2.1] — 2026-05-19
+
+**Sprint 6/F1 sub-phase 3a hotfix** — closes cosmic-flute task #173. Root cause + fix documented in cosmic-flute §37.17 + §37.18.
+
+### Fixed
+
+- **HIGH/C3 cross-repo `workflow_call` self-checkout**: `.github/workflows/aegis-verify-attestation.yml` `actions/checkout` step used `ref: ${{ github.workflow_sha }}` to self-checkout the reusable workflow's source repo. In cross-repo `workflow_call` from a FOREIGN repo, `github.workflow_sha` resolves to the CALLER's commit SHA — NOT the callee's pinned SHA — per github/gh-aw issue #24918 (Microsoft, runtime debug output proof filed 2026-04-06). Result: `fatal: remote error: upload-pack: not our ref <caller-sha>`.
+
+  The bug was caught by cosmic-flute §37 Sprint 6/F1 sub-phase 3 dry-run (aegis-governance RUN `25980426234`, 2026-05-17). All 4 prior jobs in the deploy pipeline PASSED; the canonical Tier-4e offline-verify proof with real pinned keys PASSED LOCALLY — the trust spine itself was intact. Only the verifier-kit's self-checkout step failed. Validates §17 Critical 3 dogfood-before-rollout pattern: the bug would have shipped to all 19 Sprint 7/G2-G3 consumers if not caught.
+
+  **Fix** (defense-in-depth per cosmic-flute §37.18.3 + §37.18.11 L1):
+  - **PRIMARY**: 2-step pattern with new `resolve_callee` step using `job.workflow_repository` + `job.workflow_sha`. These DO return callee values per GitHub Docs Contexts reference §job-context (GitHub.com cloud).
+  - **FALLBACK**: `referenced_workflows` API via `actions/github-script@3a2844b7` (v9.0.0) calling `github.rest.actions.getWorkflowRun()` and reading `data.referenced_workflows[].sha` — preferring immutable SHA over mutable `ref` per github/gh-aw PR #24974 lesson. Works on GitHub Enterprise Server where `job.workflow_*` is unavailable.
+
+  Pattern matches production-tested approaches in:
+  - `canonical/get-workflow-version-action` (Apache-2.0; production since 2024)
+  - Microsoft's `github/gh-aw` PRs #24200 + #24433 + #24974 (all 2026-04)
+
+  Permissions delta: top-level `permissions:` block now includes `actions: read` (in addition to existing `contents: read`) for the API fallback. Per reusable-workflow propagation rules, callers MUST include `actions: read` in their workflow-level or job-level `permissions:` block.
+
+### Added
+
+- **`tests/test_workflow_invariants.py::TestCrossRepoCheckoutPattern`** — 5 new regression tests that catch the syntactic class of this bug:
+  - `test_uses_job_workflow_context_for_callee_resolution` — asserts `job.workflow_sha` + `job.workflow_repository` present
+  - `test_has_referenced_workflows_api_fallback` — asserts `referenced_workflows` + `getWorkflowRun` present
+  - `test_top_level_permissions_includes_actions_read` — asserts `permissions: actions: read`
+  - `test_checkout_uses_resolved_outputs` — asserts `repository:` + `ref:` consume `steps.resolve_callee.outputs.*`
+  - `test_prefers_immutable_sha_over_ref_in_api_fallback` — asserts `matchingEntry.sha || matchingEntry.ref` pattern (gh-aw #24974 lesson)
+
+- **`tests/test_workflow_invariants.py::TestReusableWorkflowF1F2Regression`** updated:
+  - `test_reusable_workflow_checkout_uses_workflow_sha` → renamed/replaced with `test_reusable_workflow_checkout_uses_resolve_callee_outputs` — the previous positive assertion asserted the buggy `${{ github.workflow_sha }}` pattern as if it were correct. The new test asserts the corrected `${{ steps.resolve_callee.outputs.ref }}` pattern.
+  - `test_reusable_workflow_checkout_does_NOT_use_invalid_context` extended — now rejects BOTH `github.event.workflow.ref` (original E3 F1+F2 typo) AND `github.workflow_sha` (the §37.17 cross-repo bug) on any `ref:` line. Comment-block mentions still permitted (used to explain the wrong patterns).
+
+- **`docs/architecture/adr/ADR-001-repo-trust-model.md` §Decision subsection** — "Cross-repo workflow_call self-checkout: callee-context vs caller-context" (~60 lines) documenting the canonical 2025/2026 GitHub Actions semantics + the production discovery context. Status stays Accepted (additive implementation-level clarification, not a new architectural decision per ADR conventions).
+
+### Consumer-facing notes (breaking change in permissions union)
+
+- Callers invoking `uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<NEW-SHA>` MUST add `actions: read` to their workflow-level or job-level `permissions:` block. Reusable-workflow `permissions:` are downgradable-only — the called workflow cannot grant itself more than the caller has. Existing callers with `permissions: contents: read` only will hit a runtime permission failure on the new resolve_callee step.
+
+- Existing callers pinned to aegis-policy@`5b3e2c0` (E3 ship) or earlier are NOT affected until they bump to this v1.2.1 SHA. Sub-phase 4 (aegis-governance v1.2.6) will be the first consumer to bump.
+
+### Verification chain
+
+This PR's bug-discovery path is the canonical proof of the dogfood model:
+
+1. Production /attest endpoint working (cosmic-flute §32.7 + §33.11.6 Tier 4c)
+2. Pinned keys + offline verifier working (cosmic-flute §28.17 + §32.7 Tier 4e canonical proof)
+3. Cross-repo `workflow_call` self-checkout BROKEN (this hotfix)
+
+Items 1 + 2 are unchanged; item 3 is what's fixed. Trust spine (server-side issue + offline verify with real pinned keys) was provably intact throughout — only the verifier-kit's self-checkout failed.
+
+### Upstream references
+
+- Cosmic-flute plan §37.17: root-cause analysis from Sprint 6/F1 sub-phase 3 dry-run
+- Cosmic-flute plan §37.18: this hotfix execution plan
+- github/gh-aw issue #24918: <https://github.com/github/gh-aw/issues/24918>
+- github/gh-aw PR #24974: <https://github.com/github/gh-aw/pull/24974>
+- canonical/get-workflow-version-action: <https://github.com/canonical/get-workflow-version-action>
+- GitHub Docs Contexts reference: <https://docs.github.com/en/actions/reference/workflows-and-actions/contexts>
+
+---
+
 ## [1.2.0] — 2026-05-13
 
 **Sprint 5/E3 ship** — closes cosmic-flute task #29 (reusable workflow) + bundles task #129 deferred E2 doc-flips per cosmic-flute §34.17.3.

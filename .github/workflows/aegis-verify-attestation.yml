@@ -147,6 +147,7 @@ on:
 
 permissions:
   contents: read
+  actions: read   # required by §37.18.3 referenced_workflows API fallback in resolve_callee step
 
 jobs:
   verify:
@@ -166,28 +167,108 @@ jobs:
       nonce: ${{ steps.verify.outputs.nonce }}
       replay-checked: ${{ steps.verify.outputs.replay-checked }}
     steps:
-      - name: Checkout aegis-policy at the pinned SHA
-        # github.workflow_sha resolves to the commit SHA of THIS reusable
-        # workflow file at execution time — for `uses: <repo>/.github/
-        # workflows/X.yml@<sha>` invocations, that's exactly the `<sha>`
-        # the caller pinned (verified against official GitHub Actions
-        # context-reference docs 2026-05-13). This ensures the composite
-        # Action checked out below matches byte-for-byte the ref the
-        # caller pinned — critical because the public-key fingerprints
-        # in policy/verifier-policy-v1.yaml MUST match the bytes in
-        # keys/, and a mismatched ref would invalidate the runtime
-        # fingerprint cross-check in scripts/verify_action.py.
-        #
-        # Note: an earlier plan-time draft used `github.event.workflow.ref`
-        # — that is NOT a documented context variable for workflow_call
-        # invocations; it evaluates to empty string, causing actions/
-        # checkout to fall back to the named repository's default branch
-        # (NOT the caller-pinned SHA). Bug-hunt F1/F2 caught this.
+      # === BEGIN cross-repo workflow_call self-checkout resolver ===
+      # Resolves the callee's repo + commit SHA for self-checkout. CRITICAL
+      # for cross-repo workflow_call (the canonical Sprint 6+ consumer path).
+      #
+      # Why github.workflow_* does NOT work here:
+      #   - In cross-repo workflow_call, the `github` context is associated
+      #     with the CALLER, not the callee (see GitHub Docs: Contexts
+      #     reference §github). github.workflow_sha and github.workflow_ref
+      #     BOTH return CALLER values (per github/gh-aw issue #24918,
+      #     confirmed via Actions runtime debug output 2026-04-06; cosmic-
+      #     flute §37.17 root-cause analysis from sub-phase 3 dry-run
+      #     RUN 25980426234 2026-05-17). Result if used:
+      #     `fatal: remote error: upload-pack: not our ref <caller-sha>`.
+      #
+      # Defense-in-depth resolution (cosmic-flute §37.18.3 + §37.18.11 L1):
+      #   1. PRIMARY: job.workflow_repository + job.workflow_sha — these DO
+      #      return callee values per Contexts reference §job-context.
+      #      GitHub.com cloud only; not GitHub Enterprise Server.
+      #   2. FALLBACK: referenced_workflows API via github-script.
+      #      Mirrors canonical/get-workflow-version-action + Microsoft's
+      #      own gh-aw PRs #24200 / #24433 / #24974. Works on GHES.
+      #      Prefers immutable SHA over mutable ref (gh-aw #24974 lesson).
+      #
+      # The two-step pattern (resolve_callee → checkout consuming its
+      # outputs) preserves byte-exact key/policy/script consistency: the
+      # public-key fingerprints in policy/verifier-policy-v1.yaml MUST
+      # match the bytes in keys/, and a mismatched ref would invalidate
+      # the runtime fingerprint cross-check in scripts/verify_action.py.
+      - name: Resolve callee workflow ref (cross-repo workflow_call)
+        id: resolve_callee
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          script: |
+            // PRIMARY path: GitHub.com cloud — job.workflow_* returns callee values.
+            // toJSON safely embeds GHA context values as JS string literals
+            // (handles empty / null / quoted strings cleanly).
+            const jobRepo = ${{ toJSON(job.workflow_repository) }};
+            const jobSha = ${{ toJSON(job.workflow_sha) }};
+
+            let resolvedRepo = jobRepo;
+            let resolvedRef = jobSha;
+            let resolutionPath = 'job.workflow_*';
+
+            if (!jobRepo || !jobSha) {
+              // FALLBACK: GHES (where job.workflow_* unavailable) or future
+              // regression. Mirrors gh-aw PR #24974 + canonical/get-
+              // workflow-version-action production pattern.
+              core.info('job.workflow_repository or job.workflow_sha empty (GHES?) — falling back to referenced_workflows API');
+
+              const callerOwner = context.repo.owner;
+              const callerRepo = context.repo.repo;
+              const runId = parseInt(process.env.GITHUB_RUN_ID, 10);
+
+              if (!Number.isFinite(runId)) {
+                throw new Error('GITHUB_RUN_ID invalid; cannot resolve callee via referenced_workflows API');
+              }
+
+              const run = await github.rest.actions.getWorkflowRun({
+                owner: callerOwner,
+                repo: callerRepo,
+                run_id: runId,
+              });
+
+              const referenced = run.data.referenced_workflows || [];
+              core.info(`Found ${referenced.length} referenced_workflows entries`);
+
+              // Find the entry matching THIS reusable workflow's filename.
+              const matchingEntry = referenced.find((wf) =>
+                wf.path.includes('/.github/workflows/aegis-verify-attestation.yml'),
+              );
+              if (!matchingEntry) {
+                throw new Error(
+                  `No referenced_workflows entry matched aegis-verify-attestation.yml. ` +
+                  `Searched ${referenced.length} entries. Paths: ` +
+                  JSON.stringify(referenced.map((w) => w.path)),
+                );
+              }
+
+              // Parse path format: owner/repo/.github/workflows/file.yml@ref
+              const pathMatch = matchingEntry.path.match(/^([^/]+)\/([^/]+)\//);
+              if (!pathMatch) {
+                throw new Error(`Cannot parse referenced_workflows.path: ${matchingEntry.path}`);
+              }
+              resolvedRepo = `${pathMatch[1]}/${pathMatch[2]}`;
+              // Prefer immutable SHA over mutable ref (gh-aw #24974 — resists
+              // branch drift during long-running jobs).
+              resolvedRef = matchingEntry.sha || matchingEntry.ref;
+              resolutionPath = 'referenced_workflows-API';
+            }
+
+            core.info(`Resolved callee via ${resolutionPath}: ${resolvedRepo}@${resolvedRef}`);
+            core.setOutput('repository', resolvedRepo);
+            core.setOutput('ref', resolvedRef);
+            core.setOutput('resolution_path', resolutionPath);
+
+      - name: Checkout aegis-policy at the resolved callee ref
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
         with:
-          repository: undercurrentai/aegis-policy
-          ref: ${{ github.workflow_sha }}
+          repository: ${{ steps.resolve_callee.outputs.repository }}
+          ref: ${{ steps.resolve_callee.outputs.ref }}
           path: aegis-policy
+      # === END cross-repo workflow_call self-checkout resolver ===
 
       - name: Verify attestation (delegate to composite action)
         id: verify
