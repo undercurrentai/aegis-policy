@@ -31,6 +31,7 @@ on:
 
 permissions:
   contents: read
+  actions: read   # defensive: aegis-verify-attestation.yml v1.2.1+ declares actions: read for its referenced_workflows API fallback. Same-repo local workflow_call uses the job.workflow_* primary path, so this perm is not strictly required for the selftest to pass — but adding here matches the consumer-side declaration pattern documented in CHANGELOG [1.2.1] and prevents future regressions if selftest ever switches to a cross-repo invocation pattern. /quality-gate QG-§37.18 Phase 2 cycle 1 finding F1.2 (MEDIUM/C2).
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────

@@ -72,7 +72,14 @@ class TestReusableWorkflowF1F2Regression:
         )
         assert checkout_step is not None, "no actions/checkout step found"
         ref_expr = checkout_step["with"]["ref"]
-        assert ref_expr.strip() == "${{ steps.resolve_callee.outputs.ref }}", (
+        # Whitespace-tolerant regex (was strict-equality `==`). Allows
+        # semantically-equivalent variations like `${{  steps.resolve_callee.outputs.ref  }}`
+        # with extra inner whitespace, which parse identically in GHA but
+        # would have failed the previous byte-identical assertion.
+        # /quality-gate QG-§37.18 Phase 2 cycle 1 finding F2.1 (MEDIUM/C3).
+        import re as _re
+        _ref_pattern = r"^\s*\$\{\{\s*steps\.resolve_callee\.outputs\.ref\s*\}\}\s*$"
+        assert _re.search(_ref_pattern, ref_expr), (
             f"checkout ref must consume resolve_callee.outputs.ref; got {ref_expr!r}. "
             f"See cosmic-flute §37.18.3 + §37.17 cross-repo workflow_call bug."
         )
@@ -138,9 +145,14 @@ class TestCrossRepoCheckoutPattern:
             "Reusable workflow MUST have referenced_workflows API fallback "
             "for GHES compatibility. See §37.18.3 fallback resolution path."
         )
-        assert "getWorkflowRun" in wf, (
-            "API fallback MUST call github.rest.actions.getWorkflowRun. "
-            "See §37.18.3."
+        # Substring with trailing paren disambiguates the actual CALL site from
+        # mere comment/string mentions of the symbol. /quality-gate QG-§37.18
+        # Phase 2 cycle 1 finding F2.9 (MEDIUM/C3).
+        assert "getWorkflowRun(" in wf, (
+            "API fallback MUST CALL github.rest.actions.getWorkflowRun(...). "
+            "Substring `getWorkflowRun(` (with open-paren) is required to "
+            "disambiguate from comments/string mentions that name the symbol "
+            "without invoking it. See §37.18.3."
         )
 
     def test_top_level_permissions_includes_actions_read(self):
@@ -193,6 +205,71 @@ class TestCrossRepoCheckoutPattern:
             "to resist branch drift (gh-aw PR #24974). See §37.18.3."
         )
 
+    def test_github_script_pinned_by_sha(self):
+        """The resolve_callee step's actions/github-script MUST be SHA-pinned
+        (40-char hex, case-insensitive), NOT a floating tag like @v9.
+        Floating-tag pins violate SLSA-L3 supply-chain hygiene — a malicious
+        force-push to the tag would silently change the github-script body
+        executed in this privileged workflow.
+
+        Case-insensitive `[0-9a-fA-F]` per /quality-gate Phase 3 /ultrathink
+        probe U5: Git accepts mixed-case SHAs; lowercase-only regex would
+        false-negative on a tool that emits uppercase.
+
+        /quality-gate QG-§37.18 Phase 2 cycle 1 finding F2.5 (HIGH/C3)
+        + Phase 3 /ultrathink U5 (MEDIUM/C2) regex hardening.
+        """
+        import re as _re
+        wf = REUSABLE_WORKFLOW.read_text()
+        # Match `uses: actions/github-script@<40-char-hex-sha>` allowing
+        # trailing whitespace + optional `  # v9.0.0` comment.
+        sha_pin_pattern = r"uses:\s+actions/github-script@[0-9a-fA-F]{40}\b"
+        assert _re.search(sha_pin_pattern, wf), (
+            "actions/github-script MUST be SHA-pinned (40-char hex), NOT a "
+            "floating tag like @v9 or @main. Floating tags are mutable and "
+            "violate SLSA-L3 supply-chain hygiene. See §37.18.3 + "
+            "https://docs.github.com/en/actions/security-for-github-actions/"
+            "security-hardening-for-github-actions/security-hardening-for-github-actions"
+        )
+
+    def test_resolve_callee_emits_required_outputs(self):
+        """The resolve_callee github-script body MUST emit both
+        `core.setOutput('repository', ...)` and `core.setOutput('ref', ...)`.
+        If either is renamed/removed, the downstream actions/checkout step
+        receives empty values and SILENTLY falls back to the default branch
+        (NOT the pinned SHA), breaking the byte-exact key/policy/script
+        consistency contract.
+
+        Regex matches BOTH single-quote `'repository'` and double-quote
+        `"repository"` JS string literal forms — JS is quote-style tolerant
+        and a future refactor using double quotes would be semantically
+        identical but a strict single-quote substring match would fail.
+        Per /quality-gate Phase 3 /ultrathink U1-2nd (MEDIUM/C3).
+
+        /quality-gate QG-§37.18 Phase 2 cycle 1 finding F2.6 (HIGH/C3)
+        + Phase 3 /ultrathink U1-2nd (MEDIUM/C3) quote-style tolerance.
+        """
+        import re as _re
+        wf = REUSABLE_WORKFLOW.read_text()
+        # Quote-style-tolerant match: ' or " around the output key.
+        repo_pattern = r"""core\.setOutput\(\s*['"]repository['"]"""
+        ref_pattern = r"""core\.setOutput\(\s*['"]ref['"]"""
+        assert _re.search(repo_pattern, wf), (
+            "resolve_callee MUST emit core.setOutput('repository', ...) "
+            "(single or double quotes around 'repository'). "
+            "Without it, actions/checkout would receive an empty `repository:` "
+            "and fall back to the workflow's home repo — bypassing the "
+            "callee-resolution contract. See §37.18.3."
+        )
+        assert _re.search(ref_pattern, wf), (
+            "resolve_callee MUST emit core.setOutput('ref', ...) "
+            "(single or double quotes around 'ref'). "
+            "Without it, actions/checkout would receive an empty `ref:` and "
+            "silently fall back to the default branch — NOT the caller-pinned "
+            "SHA — breaking byte-exact key/policy/script consistency. "
+            "See §37.18.3."
+        )
+
 
 class TestSelftestWorkflowF4Regression:
     """Phase 2 cycle 1 F4 regression — assert-job skip semantics."""
@@ -236,6 +313,43 @@ class TestSelftestWorkflowF4Regression:
                 f"that would skip the assert when the upstream reusable-workflow "
                 f"invocation FAILS, defeating the F4 fix. Got if={if_clause!r}."
             )
+
+    def test_e3_selftest_has_actions_read_permission(self):
+        """e3-workflow-selftest.yml MUST declare `actions: read` at the
+        top-level permissions block.
+
+        Defensive guard: the selftest currently uses LOCAL same-repo
+        `./.github/workflows/aegis-verify-attestation.yml` references, so
+        `job.workflow_*` populates correctly and the API fallback in
+        aegis-verify-attestation.yml resolve_callee step does NOT fire — so
+        `actions: read` is not strictly required for the selftest to PASS
+        today. HOWEVER, if the selftest is ever refactored to invoke the
+        reusable workflow via the cross-repo
+        `undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>`
+        path (e.g., to validate cross-repo semantics from within this repo's
+        CI), the API fallback path becomes reachable and WILL fail without
+        `actions: read`. Adding the permission now matches the consumer-side
+        declaration pattern documented in CHANGELOG [1.2.1] §"Consumer-facing
+        notes (breaking change in permissions union)".
+
+        /quality-gate QG-§37.18 Phase 2 cycle 1 finding F1.2 (MEDIUM/C2 —
+        defensive after downgrade from initial HIGH/C3 classification).
+        """
+        doc = yaml.safe_load(SELFTEST_WORKFLOW.read_text())
+        perms = doc.get("permissions", {})
+        assert isinstance(perms, dict), (
+            f"selftest top-level permissions MUST be a dict; got {type(perms).__name__}"
+        )
+        assert perms.get("actions") == "read", (
+            f"e3-workflow-selftest.yml top-level permissions MUST include "
+            f"'actions: read' (defensive — matches the consumer-side declaration "
+            f"pattern required when the reusable workflow's API fallback fires). "
+            f"Got: {perms!r}. See CHANGELOG [1.2.1] + cosmic-flute §37.18 QG F1.2."
+        )
+        assert perms.get("contents") == "read", (
+            f"e3-workflow-selftest.yml top-level permissions MUST keep "
+            f"'contents: read'. Got: {perms!r}"
+        )
 
     def test_replay_second_keeps_step_level_continue_on_error(self):
         """selftest-replay-second invokes the composite Action at STEP level

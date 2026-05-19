@@ -84,7 +84,18 @@ Out of the rigor-aegis-attestations protocol scope; planned for the cosmos-mixin
         └───────────────┬───────────────────┘
                         │
                         ▼
-                Sprint 6/F1 (aegis-deploy.yml dogfood)
+        ┌───────────────────────────────────────┐
+        │ Sprint 6/F1 sub-phase 3a (✅ shipped)  │
+        │ ✅ aegis-policy@c2ce026                │
+        │ cross-repo workflow_call self-checkout │
+        │ defense-in-depth fix                   │
+        │ closes cosmic-flute #173               │
+        │ (sub-phase 3b validated 2026-05-19    │
+        │  via aegis-governance feature branch) │
+        └───────────────┬───────────────────────┘
+                        │
+                        ▼
+                Sprint 6/F1 sub-phase 4 (aegis-governance v1.2.6 PR)
                 Sprint 6/F2 (openclaw blue-green dogfood)
                         │
                         ▼

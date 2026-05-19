@@ -233,24 +233,65 @@ jobs:
               const referenced = run.data.referenced_workflows || [];
               core.info(`Found ${referenced.length} referenced_workflows entries`);
 
-              // Find the entry matching THIS reusable workflow's filename.
-              const matchingEntry = referenced.find((wf) =>
-                wf.path.includes('/.github/workflows/aegis-verify-attestation.yml'),
-              );
-              if (!matchingEntry) {
+              // Find the entry matching THIS reusable workflow's filename via
+              // an ANCHORED regex (not substring `.includes()`) to prevent
+              // longer-path forgery — e.g., a malicious nested
+              // `attacker/repo/.github/workflows/aegis-verify-attestation.yml.evil/inner.yml`
+              // would have matched the previous `.includes('/.github/workflows/aegis-
+              // verify-attestation.yml')` substring filter. The anchored regex
+              // consolidates the substring filter + downstream owner/repo
+              // extraction into a single safe pass.
+              // /quality-gate QG-§37.18 Phase 2 cycle 1 finding F1.1 (MEDIUM/C2;
+              // defense-in-depth — referenced_workflows is server-computed so
+              // forgery is theoretical, but cheap to harden).
+              //
+              // Path format (per GitHub REST API):
+              //   <owner>/<repo>/.github/workflows/<file>.yml@<ref>
+              // The optional `@<ref>` suffix appears for cross-repo references.
+              const SELF_REGEX = /^([^/]+)\/([^/]+)\/\.github\/workflows\/aegis-verify-attestation\.yml(?:@.*)?$/;
+              // Collect ALL matches (not just first) to detect multi-match
+              // ambiguity per /quality-gate Phase 3 /ultrathink U6 (MEDIUM/C2):
+              // GitHub API does not guarantee referenced_workflows[] ordering.
+              // If two entries point at the same path with different SHAs
+              // (rare but possible in nested workflow_call chains where the
+              // same reusable workflow is invoked at multiple SHAs), picking
+              // the FIRST returned would be non-deterministic. Throw with full
+              // disambiguation context so the caller can pin explicitly.
+              const matches = [];
+              for (const wf of referenced) {
+                const m = wf.path.match(SELF_REGEX);
+                if (m) {
+                  matches.push({ entry: wf, owner: m[1], repo: m[2] });
+                }
+              }
+              if (matches.length === 0) {
                 throw new Error(
-                  `No referenced_workflows entry matched aegis-verify-attestation.yml. ` +
+                  `No referenced_workflows entry matched aegis-verify-attestation.yml (anchored regex). ` +
                   `Searched ${referenced.length} entries. Paths: ` +
                   JSON.stringify(referenced.map((w) => w.path)),
                 );
               }
-
-              // Parse path format: owner/repo/.github/workflows/file.yml@ref
-              const pathMatch = matchingEntry.path.match(/^([^/]+)\/([^/]+)\//);
-              if (!pathMatch) {
-                throw new Error(`Cannot parse referenced_workflows.path: ${matchingEntry.path}`);
+              if (matches.length > 1) {
+                // Allow multi-match ONLY if all entries point at the same
+                // (owner, repo, sha) — that's a benign duplicate. Otherwise
+                // throw with disambiguation context.
+                const dedupeKey = (mm) => `${mm.owner}/${mm.repo}@${mm.entry.sha || mm.entry.ref}`;
+                const uniqueKeys = [...new Set(matches.map(dedupeKey))];
+                if (uniqueKeys.length > 1) {
+                  throw new Error(
+                    `Multiple aegis-verify-attestation.yml referenced_workflows entries found with DIFFERENT (owner, repo, sha) tuples — cannot deterministically resolve callee. ` +
+                    `GitHub API does not guarantee referenced_workflows[] ordering, so picking the first would be non-deterministic. ` +
+                    `Distinct callee tuples: ${JSON.stringify(uniqueKeys)}. ` +
+                    `Resolution: pin caller-side, or file aegis-policy issue with the caller's workflow context.`,
+                  );
+                }
+                core.info(`Multi-match with identical (owner,repo,sha) tuple (${uniqueKeys[0]}); resolving deterministically.`);
               }
-              resolvedRepo = `${pathMatch[1]}/${pathMatch[2]}`;
+              const matchingEntry = matches[0].entry;
+              const matchedOwner = matches[0].owner;
+              const matchedRepo = matches[0].repo;
+
+              resolvedRepo = `${matchedOwner}/${matchedRepo}`;
               // Prefer immutable SHA over mutable ref (gh-aw #24974 — resists
               // branch drift during long-running jobs).
               resolvedRef = matchingEntry.sha || matchingEntry.ref;

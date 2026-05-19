@@ -6,6 +6,114 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 
 ---
 
+## [1.2.2] — 2026-05-19
+
+**QG-§37.18 post-ship audit follow-ups** — closes 6 of 9 blocking findings from `/quality-gate` Phase 2 cycle 1 on aegis-policy@c2ce026 (cosmic-flute §37.18 sub-phase 3a). 3 deferred to accepted-findings.jsonl + Sprint 7/G1 verifier-kit hardening backlog. No behavior change for production consumers; tightens defense-in-depth + closes regression test coverage gaps.
+
+### Changed
+
+- **`.github/workflows/aegis-verify-attestation.yml` resolve_callee API fallback** (F1.1 MEDIUM/C2): replaced `referenced.find((wf) => wf.path.includes('/.github/workflows/aegis-verify-attestation.yml'))` substring filter + downstream `^([^/]+)/([^/]+)/` path regex with a single ANCHORED regex pass:
+
+  ```javascript
+  const SELF_REGEX = /^([^/]+)\/([^/]+)\/\.github\/workflows\/aegis-verify-attestation\.yml(?:@.*)?$/;
+  ```
+
+  Defense-in-depth against theoretical longer-path forgery (e.g., a malicious nested `attacker/repo/.github/workflows/aegis-verify-attestation.yml.evil/inner.yml` that would have matched the substring filter). Practical exploitability gated by GitHub's server-computed `referenced_workflows` shape, so this is forward-looking hardening.
+
+- **`.github/workflows/e3-workflow-selftest.yml` permissions** (F1.2 MEDIUM/C2): added `actions: read` to top-level `permissions:` block. NOT strictly required today (selftest uses LOCAL same-repo `./.github/workflows/...` references, so `job.workflow_*` populates correctly and the API fallback path doesn't fire). Defensive add — matches the consumer-side declaration pattern documented in [1.2.1] §"Consumer-facing notes (breaking change in permissions union)" and prevents future regressions if the selftest is ever refactored to invoke cross-repo.
+
+- **`tests/test_workflow_invariants.py` test_reusable_workflow_checkout_uses_resolve_callee_outputs** (F2.1 MEDIUM/C3): relaxed strict byte-identical equality (`==`) to whitespace-tolerant regex match. Previously, semantically-equivalent `${{  steps.resolve_callee.outputs.ref  }}` (extra inner whitespace) would have failed despite parsing identically in GHA.
+
+- **`tests/test_workflow_invariants.py` test_has_referenced_workflows_api_fallback** (F2.9 MEDIUM/C3): tightened `"getWorkflowRun" in wf` to `"getWorkflowRun(" in wf` (with trailing paren). Disambiguates the actual call site from comments/string mentions of the symbol.
+
+### Added
+
+- **`tests/test_workflow_invariants.py::TestCrossRepoCheckoutPattern::test_github_script_pinned_by_sha`** (F2.5 HIGH/C3 regression guard): asserts `actions/github-script` is SHA-pinned (40-char hex regex), NOT a floating tag like `@v9`. Floating-tag pins violate SLSA-L3 supply-chain hygiene — a malicious force-push to the tag would silently change the github-script body executed in this privileged workflow.
+
+- **`tests/test_workflow_invariants.py::TestCrossRepoCheckoutPattern::test_resolve_callee_emits_required_outputs`** (F2.6 HIGH/C3 regression guard): asserts the resolve_callee github-script body emits BOTH `core.setOutput('repository', ...)` and `core.setOutput('ref', ...)`. If either is renamed/removed, the downstream actions/checkout step receives empty values → silently falls back to the default branch (NOT the pinned SHA), breaking the byte-exact key/policy/script consistency contract WITHOUT test failure.
+
+- **`tests/test_workflow_invariants.py::TestSelftestWorkflowF4Regression::test_e3_selftest_has_actions_read_permission`** (F1.2 MEDIUM/C2 regression guard): asserts e3-workflow-selftest.yml top-level `permissions:` declares `actions: read` (defensive — covers future cross-repo refactor).
+
+- **`docs/roadmap.md` Sprint 6/F1 sub-phase 3a node in cumulative dep graph** (F3.3 MEDIUM/C3): added `Sprint 6/F1 sub-phase 3a (cross-repo workflow_call fix) → ✅ aegis-policy@c2ce026` between the E3 box and the Sprint 6/F1 dogfood line. Dep graph now accurately reflects the sub-phase chain.
+
+### Forward-pointer (the [1.2.1] consumer-facing notice this entry adds context for)
+
+Per [1.2.1] §"Consumer-facing notes (breaking change in permissions union)" — when **sub-phase 4** (aegis-governance v1.2.6 PR; task #174) updates `aegis-governance/.github/workflows/aegis-deploy.yml verify.uses` to pin aegis-policy@`c2ce026` (or this v1.2.2 successor), the PR MUST also add `actions: read` to either:
+- the workflow-level `permissions:` block (alongside the existing `id-token: write` + `contents: read`), OR
+- the `verify` job's permissions union (NOTE: reusable-workflow `uses:` jobs cannot declare job-level `permissions:` — must be at workflow level).
+
+Without `actions: read`, the resolve_callee step's `referenced_workflows` API fallback (which fires when `job.workflow_*` are empty — e.g., on GHES or in future GitHub regressions) will return HTTP 403, and the verify job will fail. The PRIMARY `job.workflow_*` path on GitHub.com cloud does not need `actions: read`, so the perms-gap may go unnoticed under normal cross-repo invocation today — but the bug is latent.
+
+This forward-pointer should have been included in [1.2.1] §"Consumer-facing notes" but was omitted; this [1.2.2] entry captures it for the audit trail. /quality-gate QG-§37.18 Phase 2 cycle 1 finding F3.5 (MEDIUM/C3).
+
+### Deferred to accepted-findings.jsonl
+
+1 blocking finding deferred per the QG-§37.18 audit disposition:
+
+- **F2.2 HIGH/C3 — no runtime-semantics tests for the resolve_callee github-script body**. Substantive work requiring a Node test harness (mock `github.rest.actions.getWorkflowRun`, exercise empty/partial/multi-match referenced_workflows array shapes, exercise network-error paths, exercise `||` vs `&&` short-circuit semantics). Out of scope for this hotfix patch; bundle into Sprint 7/G1 verifier-kit hardening alongside task #154 (aegis-sdk 1.0.1 patch) + task #156 (compliance-nightly checkov).
+
+Plus 2 NEW HIGH/C3 findings from /quality-gate Phase 3 /ultrathink (U1+U2) deferred as a single bundle:
+
+- **U1+U2 HIGH/C3 — filename hardcoded in SELF_REGEX (rename hazard)** at `.github/workflows/aegis-verify-attestation.yml:251`. If this workflow file is ever renamed (e.g., for a future PQC algorithm migration), the API fallback throws "No referenced_workflows entry matched" permanently. Fix: extract filename to a const + add `test_self_regex_filename_matches_workflow_filename` asserting the literal matches `os.path.basename(REUSABLE_WORKFLOW)`. Low-likelihood trigger; bundle into Sprint 7/G1 hardening.
+
+### Phase 3 /ultrathink remediations (NEW; bundled into this same v1.2.2 commit)
+
+Pre-ship Phase 3 deep adversarial probe surfaced 10 NEW observations across IBM ODC trigger categories; 5 remediated in place, 2 deferred (U1+U2 above), 2 documented (U7, U8, U10 below), 1 wontfix (U4 Refs format on shipped commit message).
+
+In-place fixes:
+
+- **U5 MEDIUM/C2 — `test_github_script_pinned_by_sha` regex lowercase-only** at `tests/test_workflow_invariants.py:221`: relaxed `[0-9a-f]{40}` → `[0-9a-fA-F]{40}` to accept Git's case-insensitive SHAs (some tools emit uppercase).
+- **U1-2nd MEDIUM/C3 — `test_resolve_callee_emits_required_outputs` quote-style brittleness**: replaced strict single-quote substring `"core.setOutput('repository'"` with quote-style-tolerant regex `core\.setOutput\(\s*['"]repository['"]`. Future maintainer using JS double-quotes `core.setOutput("repository", ...)` (semantically identical) no longer fails.
+- **U6 MEDIUM/C2 — multi-match `for...of` non-determinism** at `.github/workflows/aegis-verify-attestation.yml:251-280`: replaced single-match-with-break loop with collect-all-matches + deduplication. If `referenced_workflows[]` contains multiple entries with the same path but different (owner,repo,sha) tuples (GitHub API ordering not guaranteed), the resolver now throws with disambiguation context rather than picking non-deterministically. Same-tuple duplicates resolve deterministically with `core.info` log.
+- **U3 MEDIUM/C3 — CHANGELOG self-contradiction** (THIS section): "Deferred" list previously listed F1.1 + F2.9 as both fixed AND deferred. Cleaned up to cite only F2.2 as deferred (the actually-deferred item).
+- **U10 MEDIUM/C2 — LOW disposition trail**: 14 LOW × C1/C2/C3 findings now enumerated below for audit trail.
+
+Documentation-only updates (no code/test change):
+
+- **U7 HIGH/C2 — Tier-4e re-validation requirement for sub-phase 4**: The canonical Tier-4e proof (§37.18.15) was executed on c2ce026's PRIMARY `job.workflow_*` path. Cycle-1 (332b999) + Phase 3 (this commit) modify the API fallback path only — the PRIMARY path bytes are unchanged. Production cloud invocations use the PRIMARY path, so the Tier-4e proof's transitive validity is preserved. HOWEVER, sub-phase 4 (aegis-governance v1.2.6 PR; task #174) MUST re-execute the §37.18.7 sub-phase 3b dry-run pattern against the new SHA pin (this v1.2.2 successor or its tag) as a formal re-validation gate BEFORE production traffic shift. The PRIMARY path is byte-identical so re-validation should pass on first attempt.
+- **U8 MEDIUM/C2 — Transitive permissions for nested reusable-workflow chains**: The [1.2.1] §"Consumer-facing notes" warned DIRECT callers of aegis-policy to grant `actions: read`. For Sprint 7/G2-G3 19-repo rollout consumers who invoke aegis-policy from a workflow that is ITSELF invoked via `workflow_call` (nested chain), reusable-workflow permissions propagate downward only. The OUTERMOST caller must grant `actions: read` — nested intermediate workflows cannot elevate. Document this transitive-perms requirement in Sprint 7/G2-G3 rollout PRs.
+
+### Wontfix (LOW disposition trail per U10)
+
+14 LOW × C1/C2/C3 findings from QG-§37.18 Phase 2 are informational only (non-blocking per the confidence-gating rule in /quality-gate Output Normalization protocol — exit criterion blocks only on CRITICAL/HIGH/MEDIUM × C2+). Enumerated for audit completeness:
+
+- F1.3 LOW/C2 (workflow): `getWorkflowRun` no try/catch — defense-in-depth observability gap
+- F1.4 LOW/C1 (workflow): silent fallback to mutable `.ref` when `.sha` empty (re-probed at U9; LOW/C2 on second look but stays informational)
+- F1.5 LOW/C1 (workflow): toJSON inline comment hardening (defense-in-depth note)
+- F2.3 LOW/C2 (test): regex brittle to JS ternary/`??` refactors of `sha || ref`
+- F2.4 LOW/C3 (test): empty `setUp(self): pass` no-op trap in pytest class
+- F2.7 LOW/C2 (test): permissions test doesn't lock-down extra-keys (over-privilege via `id-token: write` etc.)
+- F2.8 LOW/C2 (test): YAML 1.1 `on:` → bool coercion comment improvement
+- F2.10 LOW/C3 (test): negative test brittle to multi-line YAML folded scalars (speculative)
+- F2.11 LOW/C2 (test): inconsistent assert-message citation depth across TestCrossRepoCheckoutPattern
+- F3.1 LOW/C3 (docs): docs/roadmap.md "PR #TBD" stale placeholder
+- F3.2 LOW/C2 (docs): "EXECUTED-FAILED-GRACEFULLY" ad-hoc status not in legend vocabulary
+- F3.4 LOW/C2 (docs): CHANGELOG missing structured `Refs:` footer per protocol
+- F3.6 LOW/C3 (docs): ADR-001 Changelog row missing SHA/PR reference
+- F3.7 LOW/C2 (docs): gh-aw #24918 vs #24949 relationship undocumented in ADR-001
+- F3.8 LOW/C2 (docs): ADR-001 GHES-unavailability claim lacks specific citation
+- U4 LOW/C3 (commit message): cycle-1 commit `Refs:` footer used shorthand `gh-aw#NNNN` not canonical `context7=…; exa=…` format. Wontfix (cannot amend shipped commit); future commits adhere.
+
+Total: 16 entries (15 from Phase 2 + 1 from Phase 3 U4). All wontfix or informational; no follow-up PR planned. Re-elevate if production behavior surfaces a related issue.
+
+### Verification chain
+
+- pytest: 14/14 PASS in test_workflow_invariants.py (was 11; +3 NEW: test_github_script_pinned_by_sha + test_resolve_callee_emits_required_outputs + test_e3_selftest_has_actions_read_permission)
+- pytest total: 34/34 PASS in tests/ dir (was 31; +3 new tests)
+- error-class parity: 15-vs-15 unchanged (no taxonomy change)
+- fingerprint parity: 2-vs-2 unchanged (no key rotation)
+- YAML parse: clean
+- yamllint -d relaxed: line-length warnings only (existing CI config)
+
+### Upstream references
+
+- Cosmic-flute plan §37.18 + §37.18.14 + §37.18.15: sub-phase 3a + 3b ship captures
+- /quality-gate QG-§37.18: Phase 2 cycle 1 audit (this PR remediates 6 of 9 blocking findings)
+- gh-aw issue #24918 + PR #24974 + #24200 + #24433 (Microsoft): cross-repo workflow_call lineage
+- canonical/get-workflow-version-action: production composite pattern
+
+---
+
 ## [1.2.1] — 2026-05-19
 
 **Sprint 6/F1 sub-phase 3a hotfix** — closes cosmic-flute task #173. Root cause + fix documented in cosmic-flute §37.17 + §37.18.
