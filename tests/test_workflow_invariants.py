@@ -32,15 +32,30 @@ SELFTEST_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "e3-workflow-selftest.
 
 
 class TestReusableWorkflowF1F2Regression:
-    """Phase 2 cycle 1 F1+F2 regression — invalid context variable."""
+    """Phase 2 cycle 1 F1+F2 regression — invalid context variable.
 
-    def test_reusable_workflow_checkout_uses_workflow_sha(self):
-        """The inner actions/checkout step MUST resolve to the caller's pinned ref
-        via `${{ github.workflow_sha }}` — not `${{ github.event.workflow.ref }}`
-        (which is not a documented context variable for workflow_call invocations
-        and resolves to empty string, causing actions/checkout to fall back to
-        the named repository's default branch — breaking the byte-exact
-        key/policy/script consistency contract).
+    UPDATED 2026-05-19 (cosmic-flute §37.18 sub-phase 3a): the original positive
+    assertion (`ref: ${{ github.workflow_sha }}`) is itself buggy in cross-repo
+    workflow_call (resolves to CALLER's SHA per gh-aw #24918 — see §37.17
+    root-cause analysis). The fix uses a 2-step resolve_callee → checkout
+    pattern with job.workflow_sha primary + referenced_workflows API fallback.
+    See TestCrossRepoCheckoutPattern below for the new assertion surface.
+
+    These 2 tests are retained as defensive negative checks against historical
+    typos:
+      - `github.event.workflow.ref` (the original E3 Phase 2 F1+F2 typo)
+      - `github.workflow_sha` (the §37.17 cross-repo bug)
+    """
+
+    def test_reusable_workflow_checkout_uses_resolve_callee_outputs(self):
+        """The inner actions/checkout step MUST resolve to the callee's
+        pinned ref via the resolve_callee step's outputs — NOT via the
+        `github.workflow_*` context (which resolves to CALLER values in
+        cross-repo workflow_call per gh-aw #24918).
+
+        Per cosmic-flute §37.18.3 defense-in-depth pattern: resolve_callee
+        step uses job.workflow_sha (primary, callee-scoped per Contexts
+        reference §job) with referenced_workflows API fallback for GHES.
         """
         doc = yaml.safe_load(REUSABLE_WORKFLOW.read_text())
         # YAML 1.1 coerces `on:` → boolean True at top level
@@ -57,26 +72,126 @@ class TestReusableWorkflowF1F2Regression:
         )
         assert checkout_step is not None, "no actions/checkout step found"
         ref_expr = checkout_step["with"]["ref"]
-        assert ref_expr.strip() == "${{ github.workflow_sha }}", (
-            f"checkout ref must be ${{{{ github.workflow_sha }}}}; got {ref_expr!r}. "
-            f"See /quality-gate Phase 2 bug-hunt finding F1+F2."
+        assert ref_expr.strip() == "${{ steps.resolve_callee.outputs.ref }}", (
+            f"checkout ref must consume resolve_callee.outputs.ref; got {ref_expr!r}. "
+            f"See cosmic-flute §37.18.3 + §37.17 cross-repo workflow_call bug."
         )
 
     def test_reusable_workflow_checkout_does_NOT_use_invalid_context(self):
-        """Defensive check: explicitly reject the historical typo
-        `github.event.workflow.ref` anywhere in the file (including comments
-        that may have lingered)."""
+        """Defensive check: explicitly reject historical typos on any `ref:`
+        line — both `github.event.workflow.ref` (original E3 F1+F2 typo) AND
+        `github.workflow_sha` (the §37.17 cross-repo bug). Comments may
+        explain why these are wrong; the prohibition is only on `ref:` lines.
+        """
         body = REUSABLE_WORKFLOW.read_text()
-        # The fix DOES leave one explanatory reference in the comment block —
-        # but it's prefixed by "an earlier plan-time draft used" indicating the
-        # context. Verify the ref: line itself doesn't contain the invalid expr.
+        bad_patterns = ("github.event.workflow.ref", "github.workflow_sha")
         for line in body.splitlines():
             stripped = line.strip()
-            if stripped.startswith("ref:") and "github.event.workflow.ref" in stripped:
-                pytest.fail(
-                    f"reusable workflow still uses invalid context variable in ref:; "
-                    f"line: {stripped!r}"
-                )
+            if not stripped.startswith("ref:"):
+                continue
+            for bad in bad_patterns:
+                if bad in stripped:
+                    pytest.fail(
+                        f"reusable workflow uses invalid context variable on ref: line. "
+                        f"Pattern {bad!r} resolves to CALLER values in cross-repo "
+                        f"workflow_call. Use steps.resolve_callee.outputs.ref instead. "
+                        f"See cosmic-flute §37.17 + §37.18.3. Offending line: {stripped!r}"
+                    )
+
+
+class TestCrossRepoCheckoutPattern:
+    """Sprint 6/F1 sub-phase 3a regression guard — cosmic-flute §37.17 + §37.18.
+
+    The reusable workflow at .github/workflows/aegis-verify-attestation.yml
+    MUST use the job.workflow_* context (or referenced_workflows API fallback)
+    for self-checkout — NEVER the github.workflow_* context (which resolves
+    to the CALLER's values in cross-repo workflow_call per gh-aw issue #24918).
+
+    The bug was caught by Sprint 6/F1 sub-phase 3 dry-run RUN 25980426234
+    (2026-05-17) when the verify job failed at actions/checkout with
+    `fatal: remote error: upload-pack: not our ref`. See cosmic-flute §37.17
+    for the root-cause analysis and §37.18.3 for the defense-in-depth fix.
+    """
+
+    def setUp(self):
+        # pytest classes — setUp isn't called; use module-level constants.
+        pass
+
+    def test_uses_job_workflow_context_for_callee_resolution(self):
+        """Primary path: job.workflow_* returns callee values per Contexts
+        reference §job (GitHub.com cloud)."""
+        wf = REUSABLE_WORKFLOW.read_text()
+        assert "job.workflow_sha" in wf, (
+            "Reusable workflow MUST reference job.workflow_sha (callee's SHA) "
+            "in the resolve_callee step. See §37.18.3 primary resolution path."
+        )
+        assert "job.workflow_repository" in wf, (
+            "Reusable workflow MUST reference job.workflow_repository "
+            "(callee's owner/repo). See §37.18.3 primary resolution path."
+        )
+
+    def test_has_referenced_workflows_api_fallback(self):
+        """Defense-in-depth: API fallback for GHES + future-proofing per
+        gh-aw PR #24974 + canonical/get-workflow-version-action."""
+        wf = REUSABLE_WORKFLOW.read_text()
+        assert "referenced_workflows" in wf, (
+            "Reusable workflow MUST have referenced_workflows API fallback "
+            "for GHES compatibility. See §37.18.3 fallback resolution path."
+        )
+        assert "getWorkflowRun" in wf, (
+            "API fallback MUST call github.rest.actions.getWorkflowRun. "
+            "See §37.18.3."
+        )
+
+    def test_top_level_permissions_includes_actions_read(self):
+        """The referenced_workflows API fallback requires permissions:
+        actions: read. Top-level (not job-level) per §37.18.11 L7."""
+        doc = yaml.safe_load(REUSABLE_WORKFLOW.read_text())
+        perms = doc.get("permissions", {})
+        assert isinstance(perms, dict), (
+            f"Top-level permissions MUST be a dict (not a wildcard string "
+            f"like 'read-all'); got {type(perms).__name__}"
+        )
+        assert perms.get("actions") == "read", (
+            f"Top-level permissions MUST include 'actions: read' for the "
+            f"referenced_workflows API fallback. Got: {perms!r}. See §37.18.3."
+        )
+        assert perms.get("contents") == "read", (
+            f"Top-level permissions MUST keep 'contents: read' (existing "
+            f"requirement for actions/checkout). Got: {perms!r}"
+        )
+
+    def test_checkout_uses_resolved_outputs(self):
+        """actions/checkout step's repository: + ref: MUST consume the
+        resolve_callee step's outputs (not hardcoded values or github
+        context)."""
+        wf = REUSABLE_WORKFLOW.read_text()
+        # repository: should reference steps.resolve_callee.outputs.repository
+        repo_pattern = r"repository:\s*\$\{\{\s*steps\.resolve_callee\.outputs\.repository\s*\}\}"
+        ref_pattern = r"ref:\s*\$\{\{\s*steps\.resolve_callee\.outputs\.ref\s*\}\}"
+        import re as _re
+        assert _re.search(repo_pattern, wf), (
+            "Checkout step MUST consume steps.resolve_callee.outputs.repository. "
+            "Hardcoding `undercurrentai/aegis-policy` would defeat the GHES "
+            "API fallback path. See §37.18.3."
+        )
+        assert _re.search(ref_pattern, wf), (
+            "Checkout step MUST consume steps.resolve_callee.outputs.ref. "
+            "See §37.18.3."
+        )
+
+    def test_prefers_immutable_sha_over_ref_in_api_fallback(self):
+        """Per gh-aw PR #24974 lesson: prefer referenced_workflows[].sha
+        over .ref to resist branch drift during long-running jobs."""
+        wf = REUSABLE_WORKFLOW.read_text()
+        import re as _re
+        # Match patterns like `matchingEntry.sha || matchingEntry.ref` with
+        # flexible whitespace
+        sha_first_pattern = r"matchingEntry\.sha\s*\|\|\s*matchingEntry\.ref"
+        assert _re.search(sha_first_pattern, wf), (
+            "API fallback MUST prefer matchingEntry.sha over matchingEntry.ref "
+            "to resist branch drift (gh-aw PR #24974). See §37.18.3."
+        )
 
 
 class TestSelftestWorkflowF4Regression:

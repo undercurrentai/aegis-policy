@@ -96,6 +96,38 @@ The composite action emits `AttestationReplayDetected` from the action layer (NO
 
 See `policy/verifier-policy-v1.yaml replay_detection` for the machine-readable contract.
 
+### Cross-repo workflow_call self-checkout: callee-context vs caller-context
+
+Added 2026-05-19 in Sprint 6/F1 sub-phase 3a (task #173; root-cause discovery from sub-phase 3 dry-run RUN 25980426234, 2026-05-17). See cosmic-flute §37.17 (root-cause analysis) + §37.18 (execution plan).
+
+When a reusable workflow defined in this repo is invoked via `uses: undercurrentai/aegis-policy/.github/workflows/<file>@<sha>` from a CALLER repository under `workflow_call` semantics, the GitHub Actions `github` context becomes associated with the CALLER, not the callee (this repo). Specifically:
+
+- `github.workflow_sha` resolves to the CALLER's commit SHA (NOT the reusable workflow's pinned SHA)
+- `github.workflow_ref` resolves to the CALLER's workflow ref (NOT this reusable workflow's ref)
+- `github.repository` is the CALLER's repository
+- `GITHUB_WORKFLOW_REF` env var is also CALLER-scoped (per github/gh-aw issue #24949)
+
+This contradicts both older Stack Overflow guidance AND an earlier reading of the GitHub Docs Contexts reference. Per GitHub Actions runtime debug output (github/gh-aw issue #24918, filed 2026-04-06) and the Microsoft `gh-aw` maintenance fixes (PRs #24200 / #24433 / #24974, all 2026-04): `github.workflow_*` is caller-scoped in `workflow_call`. Reusable workflows MUST use the `job` context properties for self-referential values:
+
+- `job.workflow_repository` — owner/repo of THIS reusable workflow's source repo
+- `job.workflow_sha` — commit SHA of THIS reusable workflow's source file
+
+For GitHub Enterprise Server (where `job.workflow_*` is unavailable per docs.github.com), the canonical fallback is the GitHub API's `referenced_workflows` array returned by `GET /repos/{owner}/{repo}/actions/runs/{run_id}` — find the entry matching the reusable workflow's filename and use its `sha` (preferring SHA over `ref` for immutability per gh-aw PR #24974 best practice).
+
+This repo's reusable workflows MUST use the `job.workflow_*` + API fallback pattern documented in `.github/workflows/aegis-verify-attestation.yml`. The regression test `tests/test_workflow_invariants.py::TestCrossRepoCheckoutPattern` guards against future regressions to the `github.workflow_*` pattern.
+
+**Production discovery context**: this bug was caught by cosmic-flute §37 Sprint 6/F1 sub-phase 3 dry-run (aegis-governance RUN 25980426234, 2026-05-17). All 4 prior jobs in the deploy pipeline passed; the local Tier-4e canonical proof with real pinned keys also passed (the trust spine itself was intact). Only the verifier-kit's self-checkout step failed. Validates §17 Critical 3 dogfood-before-rollout pattern — the bug would have shipped to all 19 Sprint 7/G2-G3 consumers if not caught by aegis-governance dogfood.
+
+**Lesson learned**: aegis-policy's `e3-workflow-selftest.yml` (Sprint 5/E3) invokes the reusable workflow via `workflow_dispatch:` from WITHIN aegis-policy — a fundamentally different code path because `github.workflow_*` happens to resolve to aegis-policy's own values in that local invocation. True cross-repo regression coverage requires either (a) a dedicated test consumer repo, or (b) feature-branch validation on a real consumer like aegis-governance (the chosen path per §37.18.11 L2 + §37.18.7).
+
+**References**:
+- GitHub Docs: Contexts reference §job (https://docs.github.com/en/actions/reference/workflows-and-actions/contexts)
+- github/gh-aw issue #24918 (the runtime debug output proof, filed 2026-04-06)
+- github/gh-aw PRs #24200 + #24433 + #24974 (Microsoft's own fix pattern)
+- canonical/get-workflow-version-action (production composite using API fallback, since 2024)
+- cosmic-flute §37.17 (root-cause analysis from sub-phase 3 dry-run, 2026-05-17)
+- cosmic-flute §37.18 (this hotfix execution plan, 2026-05-18→19)
+
 ## Consequences
 
 ### Positive
@@ -145,3 +177,4 @@ See cosmic-flute §26: `~/.claude/plans/let-s-plan-this-cosmic-flute.md`. Sequen
 |---|---|---|
 | 2026-05-09 | Claude Opus 4.7 (1M context) / Josh Kirby | Initial draft (Status: Accepted on bootstrap PR) |
 | 2026-05-13 | Claude Opus 4.7 (1M context) / Josh Kirby | Sprint 5/E2 Phase A: added §Decision subsection "Consumer-owned replay-detection responsibility" (closes task #119; companion to `policy/verifier-policy-v1.yaml replay_detection:` block + v2.1.0 bump). Status stays Accepted; this is an additive clarification, not a new decision. |
+| 2026-05-19 | Claude Opus 4.7 (1M context) / Josh Kirby | Sprint 6/F1 sub-phase 3a: added §Decision subsection "Cross-repo workflow_call self-checkout: callee-context vs caller-context" (closes task #173; companion to `.github/workflows/aegis-verify-attestation.yml` defense-in-depth fix + v1.2.1 patch). Documents the canonical 2025/2026 GitHub Actions context-variable semantics for reusable workflows + the production discovery from cosmic-flute §37.17. Status stays Accepted; this is an additive clarification of an implementation-level requirement, not a new architectural decision. |
