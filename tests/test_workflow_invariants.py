@@ -207,18 +207,23 @@ class TestCrossRepoCheckoutPattern:
 
     def test_github_script_pinned_by_sha(self):
         """The resolve_callee step's actions/github-script MUST be SHA-pinned
-        (40-char hex), NOT a floating tag like @v9. Floating-tag pins violate
-        SLSA-L3 supply-chain hygiene — a malicious force-push to the tag
-        would silently change the github-script body executed in this
-        privileged workflow.
+        (40-char hex, case-insensitive), NOT a floating tag like @v9.
+        Floating-tag pins violate SLSA-L3 supply-chain hygiene — a malicious
+        force-push to the tag would silently change the github-script body
+        executed in this privileged workflow.
 
-        /quality-gate QG-§37.18 Phase 2 cycle 1 finding F2.5 (HIGH/C3).
+        Case-insensitive `[0-9a-fA-F]` per /quality-gate Phase 3 /ultrathink
+        probe U5: Git accepts mixed-case SHAs; lowercase-only regex would
+        false-negative on a tool that emits uppercase.
+
+        /quality-gate QG-§37.18 Phase 2 cycle 1 finding F2.5 (HIGH/C3)
+        + Phase 3 /ultrathink U5 (MEDIUM/C2) regex hardening.
         """
         import re as _re
         wf = REUSABLE_WORKFLOW.read_text()
         # Match `uses: actions/github-script@<40-char-hex-sha>` allowing
         # trailing whitespace + optional `  # v9.0.0` comment.
-        sha_pin_pattern = r"uses:\s+actions/github-script@[0-9a-f]{40}\b"
+        sha_pin_pattern = r"uses:\s+actions/github-script@[0-9a-fA-F]{40}\b"
         assert _re.search(sha_pin_pattern, wf), (
             "actions/github-script MUST be SHA-pinned (40-char hex), NOT a "
             "floating tag like @v9 or @main. Floating tags are mutable and "
@@ -235,17 +240,30 @@ class TestCrossRepoCheckoutPattern:
         (NOT the pinned SHA), breaking the byte-exact key/policy/script
         consistency contract.
 
-        /quality-gate QG-§37.18 Phase 2 cycle 1 finding F2.6 (HIGH/C3).
+        Regex matches BOTH single-quote `'repository'` and double-quote
+        `"repository"` JS string literal forms — JS is quote-style tolerant
+        and a future refactor using double quotes would be semantically
+        identical but a strict single-quote substring match would fail.
+        Per /quality-gate Phase 3 /ultrathink U1-2nd (MEDIUM/C3).
+
+        /quality-gate QG-§37.18 Phase 2 cycle 1 finding F2.6 (HIGH/C3)
+        + Phase 3 /ultrathink U1-2nd (MEDIUM/C3) quote-style tolerance.
         """
+        import re as _re
         wf = REUSABLE_WORKFLOW.read_text()
-        assert "core.setOutput('repository'" in wf, (
-            "resolve_callee MUST emit core.setOutput('repository', ...). "
+        # Quote-style-tolerant match: ' or " around the output key.
+        repo_pattern = r"""core\.setOutput\(\s*['"]repository['"]"""
+        ref_pattern = r"""core\.setOutput\(\s*['"]ref['"]"""
+        assert _re.search(repo_pattern, wf), (
+            "resolve_callee MUST emit core.setOutput('repository', ...) "
+            "(single or double quotes around 'repository'). "
             "Without it, actions/checkout would receive an empty `repository:` "
             "and fall back to the workflow's home repo — bypassing the "
             "callee-resolution contract. See §37.18.3."
         )
-        assert "core.setOutput('ref'" in wf, (
-            "resolve_callee MUST emit core.setOutput('ref', ...). "
+        assert _re.search(ref_pattern, wf), (
+            "resolve_callee MUST emit core.setOutput('ref', ...) "
+            "(single or double quotes around 'ref'). "
             "Without it, actions/checkout would receive an empty `ref:` and "
             "silently fall back to the default branch — NOT the caller-pinned "
             "SHA — breaking byte-exact key/policy/script consistency. "
