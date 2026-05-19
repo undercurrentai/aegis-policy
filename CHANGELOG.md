@@ -13,9 +13,11 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 ### Changed
 
 - **`.github/workflows/aegis-verify-attestation.yml` resolve_callee API fallback** (F1.1 MEDIUM/C2): replaced `referenced.find((wf) => wf.path.includes('/.github/workflows/aegis-verify-attestation.yml'))` substring filter + downstream `^([^/]+)/([^/]+)/` path regex with a single ANCHORED regex pass:
+
   ```javascript
   const SELF_REGEX = /^([^/]+)\/([^/]+)\/\.github\/workflows\/aegis-verify-attestation\.yml(?:@.*)?$/;
   ```
+
   Defense-in-depth against theoretical longer-path forgery (e.g., a malicious nested `attacker/repo/.github/workflows/aegis-verify-attestation.yml.evil/inner.yml` that would have matched the substring filter). Practical exploitability gated by GitHub's server-computed `referenced_workflows` shape, so this is forward-looking hardening.
 
 - **`.github/workflows/e3-workflow-selftest.yml` permissions** (F1.2 MEDIUM/C2): added `actions: read` to top-level `permissions:` block. NOT strictly required today (selftest uses LOCAL same-repo `./.github/workflows/...` references, so `job.workflow_*` populates correctly and the API fallback path doesn't fire). Defensive add — matches the consumer-side declaration pattern documented in [1.2.1] §"Consumer-facing notes (breaking change in permissions union)" and prevents future regressions if the selftest is ever refactored to invoke cross-repo.
