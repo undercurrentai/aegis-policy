@@ -6,6 +6,40 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 
 ---
 
+## [1.2.3] — 2026-05-22
+
+**Post-§38 roadmap content refresh** — `docs/roadmap.md` was 4 ship cycles behind canonical state per cosmic-flute §40 /discover audit C-FIND-G (HIGH × C3). Sub-phase 3a row still claimed "🟡 in-progress 2026-05-19 (THIS PR)" + sub-phases 3b/4/5 marked ☐ blocked/planned, despite all 4 having shipped 2026-05-19 plus §38 ADR-013 forensic-audit chain shipping 2026-05-21 (aegis-governance v1.2.7 production deploy). Standalone docs-PR per senior-eng decision: HIGH/C3 + PUBLIC security-spine artifact warrants immediate accuracy over bundle-into-#185-Sprint-7/G1 deferral. ZERO production impact; ZERO source-code touches.
+
+### Changed
+
+- **`docs/roadmap.md` table rows 13-15**: status flips reflecting cumulative ship state:
+  - Sub-phase 3a: 🟡 in-progress → ✅ shipped 2026-05-19 (commit `c2ce026`); PR #11
+  - Sub-phase 3b: ☐ blocked-by 3a → ✅ validated 2026-05-19 (aegis-governance RUN 26102961343; A6 Tier-4e canonical proof PASS valid=True for decision_id `9a181766-…`)
+  - Sub-phase 4: ☐ blocked-by 3b → ✅ shipped 2026-05-19 (aegis-governance v1.2.6 production deploy; PR #182 squash-merge `8aa151d`; first non-dry-run attested deploy decision_id `52689bf3-…`; AEGIS Stage-2 decision_id `8e6a4573-…` PAUSE → override per §28.5.1)
+  - Sub-phase 5: ☐ blocked-by 4 → ✅ shipped 2026-05-19 (Sprint 6/F1 SHIP COMPLETE; cosmic-flute §37.21 ship capture; memory breadcrumb bumped; cosmic-flute tasks #30 + #170 + #171 + #174 closed)
+- **`docs/roadmap.md` Sprint 7 rows 18-20**: ☐ planned → 🟢 GREEN UNBLOCKED — planned (per cosmic-flute §38.13.7 + §27.15 post-ship disposition table; UNBLOCKED at architectural-contract layer). Sprint 7/G1 row clarified: attestation-stack-internal Ruleset (id 16294975, `aegis-*` repos) was already created during Sprint 5/E1.5 Phase 7 (2026-05-12); Sprint 7/G1 expands enforcement to the full 20-repo portfolio + ships deferred verifier-kit hardening bundle per cosmic-flute task #185.
+- **`docs/roadmap.md` dependency graph (post-Sprint-6/F1-sub-phase-3a)**: extended downstream graph nodes from "Sprint 7/G1+G2+G3" placeholder to 4 NEW boxes — QG-§37.18 v1.2.2 patch (aegis-policy@cded778) → Sub-phase 4 v1.2.6 (aegis-governance@8aa151d) → §38 forensic-audit chain (aegis-governance@f012a33 / v1.2.7) → 🟢 Sprint 6/F2 + Sprint 7/G1 + G2 + G3 UNBLOCKED.
+
+### Added
+
+- **`docs/roadmap.md` 2 NEW table rows** for post-sub-phase-3a milestones missing from prior table state:
+  - **QG-§37.18 post-ship audit** ✅ shipped 2026-05-19 (commit `cded778`, this repo's [1.2.2] patch) — PR #12 multi-match dedup + anchored SELF_REGEX + regression-test refinements + 8 LOW × C1/C2/C3 deferrals to Sprint 7/G1 task #185
+  - **§38 (post-ship CTR-5/U3 closure + forensic-audit chain)** ✅ shipped 2026-05-21 (aegis-governance v1.2.7 production deploy) — cumulative 3-PR ship cycle: PR #183 (`c570505`) primary §38 + PR #184 (`25420ca`) PyPI 1.1.0 → 1.1.1 yanked-collision hotfix + PR #185 (`f012a33`) Attest job step-order hotfix. ADR-013 forensic-audit chain via `aegis_evaluate_decision_id` DB column (Option D — predicate UNCHANGED + envelope wire format BYTE-IDENTICAL with v1.2.6). aegis-sdk 1.1.1 LIVE on PyPI. aegis-policy main UNCHANGED at `cded778` (§38 D2-defer; Sprint 7/G1 task #185 picks up policy `informational_predicate_fields` update). Closes cosmic-flute tasks #196 + #197. See cosmic-flute §38.13. **§17 Critical 3 invariant `bypass_actors=[]` preserved across 9 cumulative sole-keyholder bypass cycles.**
+
+### Wontfix (not addressed in this PR)
+
+- `docs/roadmap.md:48-78:emoji-width-ascii-drift` cosmetic ASCII-art alignment in dep-graph boxes — `.quality-gate/accepted-findings.jsonl` row 2 already dispositions this as wontfix; not re-litigated.
+
+### References
+
+- cosmic-flute §40 — `/discover` execution 2026-05-22; C-FIND-G HIGH × C3 finding
+- cosmic-flute §38.13 — §38 SHIP COMPLETE (forensic-audit chain)
+- cosmic-flute §37.21 — Sprint 6/F1 SHIP COMPLETE
+- cosmic-flute §37.18.14-§37.18.16 — sub-phase 3a ship + QG-§37.18 audit
+- cosmic-flute §34.17.2 — sole-keyholder bypass cycle (10th reuse for this PR)
+
+---
+
 ## [1.2.2] — 2026-05-19
 
 **QG-§37.18 post-ship audit follow-ups** — closes 6 of 9 blocking findings from `/quality-gate` Phase 2 cycle 1 on aegis-policy@c2ce026 (cosmic-flute §37.18 sub-phase 3a). 3 deferred to accepted-findings.jsonl + Sprint 7/G1 verifier-kit hardening backlog. No behavior change for production consumers; tightens defense-in-depth + closes regression test coverage gaps.

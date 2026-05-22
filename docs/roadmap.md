@@ -10,14 +10,16 @@ Sprint 5 / E1-E3 + Sprint 6 / F1-F2 + Sprint 7 / G1-G3 of the rigor-aegis-attest
 | **Sprint 5 / E3** | ✅ shipped 2026-05-14 (commit `c34c783`) | Reusable workflow `.github/workflows/aegis-verify-attestation.yml` (`workflow_call` trigger). Job-level orchestration consumed by the 19 non-`aegis-policy` portfolio repos (this repo itself is the 20th in the portfolio + the kit's source — it does not consume its own kit). Resolves the `verifier_policy_artifact` reference at `schema/attestation_predicate_v1.yaml:128`. Bundles task #129 deferred E2 doc-flips per cosmic-flute §34.17.3 + §35. | PR #6 (squash-merged via admin per cosmic-flute §34.17.2 sole-keyholder pattern; bypass_actors=[] restored post-merge) |
 | **Sprint 6 / F1 sub-phases 1-2** | ✅ shipped 2026-05-15 | (1) PyPI publish aegis-sdk 1.0.0 (closes cosmic-flute task #59). (2) aegis-governance aegis-deploy.yml refactor (PR #178; squash-merge `99dab87`; 6-job pipeline: test→build-candidate→migrate→attest→verify→promote). | aegis-governance v1.2.5 tag (NOT yet deployed to production; dry-run gated) |
 | **Sprint 6 / F1 sub-phase 3** | 🟠 EXECUTED-FAILED-GRACEFULLY 2026-05-17 | `workflow_dispatch dry_run=true` from aegis-governance@v1.2.5 (RUN `25980426234`). 4/5 jobs PASS (test + build-candidate + migrate + attest); verify FAILED at actions/checkout with `not our ref` — root cause: aegis-policy reusable workflow used `ref: ${{ github.workflow_sha }}` which resolves to CALLER's SHA in cross-repo workflow_call (per github/gh-aw #24918). promote SKIPPED gracefully fail-closed. Trust spine PROVEN INTACT via local Tier-4e canonical proof with real pinned keys. See cosmic-flute §37.17. | aegis-governance RUN 25980426234 logs |
-| **Sprint 6 / F1 sub-phase 3a** | 🟡 in-progress 2026-05-19 (THIS PR) | aegis-policy hotfix: defense-in-depth fix to `aegis-verify-attestation.yml` (job.workflow_sha primary + referenced_workflows API fallback per Microsoft gh-aw PRs + Canonical pattern) + 5 NEW + 1 FLIPPED regression tests + ADR-001 cross-repo lesson + CHANGELOG [1.2.1]. Closes cosmic-flute task #173. | aegis-policy PR #TBD (post-push); merge via §34.17.2 sole-keyholder bypass cycle |
-| **Sprint 6 / F1 sub-phase 3b** | ☐ blocked-by 3a | Cross-repo validation via aegis-governance feature branch: bump aegis-deploy.yml SHA pin to 3a merge SHA + `gh workflow run --field dry_run=true`. Expect 5/5 jobs PASS + Tier-4e proof PASS. Discard feature branch after validation. See cosmic-flute §37.18.7. | aegis-governance feature branch (transient) |
-| **Sprint 6 / F1 sub-phase 4** | ☐ blocked-by 3b | aegis-governance v1.2.6 PR: bump verify.uses SHA pin to 3a merge SHA + pyproject 1.2.5→1.2.6 + CHANGELOG [1.2.6]. Bundle task #170 (4 sub-phase 2 audit findings) + task #171 (regression guards) if touch-compatible. CLAUDE.md §8 Ask-First gate. Tag v1.2.6 → aegis-deploy.yml fires → full chain runs in non-dry-run mode → production deploys 1.2.4→1.2.6. See cosmic-flute §37.19.2. | aegis-governance v1.2.6 tag |
-| **Sprint 6 / F1 sub-phase 5** | ☐ blocked-by 4 | Sprint 6/F1 ship capture: cosmic-flute §37.X with cumulative results across sub-phases 1-4 + lessons learned. Bump memory breadcrumb. Mark task #30 completed. Flip Sprint 6/F2 + Sprint 7 readiness to 🟢 GREEN. | cosmic-flute §37.X new section |
-| **Sprint 6 / F2** | ☐ planned | `openclaw-operator-os/scripts/blue-green-deploy.sh` integration (dogfood across 3 substrates per cosmic-flute §11.7). | Separate plan + PR (on `openclaw-operator-os`) |
-| **Sprint 7 / G1** | ☐ planned | Org-level GitHub Ruleset for required `aegis-attestation-verified` status check across all 19 (now 20) portfolio repos. Admin-level operation. | Org settings change, not a code PR |
-| **Sprint 7 / G2** | ☐ planned | `aegis-gtm` pilot rollout — first non-aegis-governance consumer. Validates verifier-kit ergonomics for the typical Vercel-deployed website. | Separate plan + PR (on `aegis-gtm`) |
-| **Sprint 7 / G3** | ☐ planned | Roll out to remaining 18 production-bound repos. Tracked via Linear when Step 2 of the operator-OS plan wires Linear webhook. | Linear epic per repo |
+| **Sprint 6 / F1 sub-phase 3a** | ✅ shipped 2026-05-19 (commit `c2ce026`) | aegis-policy hotfix: defense-in-depth fix to `aegis-verify-attestation.yml` (job.workflow_sha primary + referenced_workflows API fallback per Microsoft gh-aw PRs + Canonical pattern) + 5 NEW + 1 FLIPPED regression tests + ADR-001 cross-repo lesson + CHANGELOG [1.2.1]. Closes cosmic-flute task #173. | PR #11 (squash-merged via admin per cosmic-flute §34.17.2 sole-keyholder pattern; bypass_actors=[] restored post-merge) |
+| **QG-§37.18 post-ship audit** | ✅ shipped 2026-05-19 (commit `cded778`) | Post-sub-phase-3a /quality-gate exhaustive audit on aegis-policy@c2ce026. Phase 2 surfaced 24 findings; Phase 3 surfaced 10 additional probes; Phase 7 produced v1.2.2 patch consolidating hardenings (multi-match dedup logic + anchored SELF_REGEX + 6 regression-test refinements). Closes accepted-findings entries in `.quality-gate/accepted-findings.jsonl` rows 1-5. Bundles 8 LOW × C1/C2/C3 deferrals into Sprint 7/G1 task #185. | PR #12 (squash-merged via admin per cosmic-flute §34.17.2 sole-keyholder pattern; cosmic-flute §37.18.16) |
+| **Sprint 6 / F1 sub-phase 3b** | ✅ validated 2026-05-19 (aegis-governance RUN `26102961343`) | Cross-repo validation via aegis-governance feature branch: bumped aegis-deploy.yml SHA pin from `5b3e2c0` to `c2ce026` + `gh workflow run --field dry_run=true`. All 5 jobs PASS (test + build-candidate + migrate + attest + **verify ✅ 1m23s**); promote SKIPPED gracefully per dry_run gate. A6 Tier-4e canonical proof PASS valid=True with REAL pinned keys for decision_id `9a181766-…`. Feature branch discarded post-validation. See cosmic-flute §37.18.15. | aegis-governance feature branch (transient; deleted post-validation) |
+| **Sprint 6 / F1 sub-phase 4** | ✅ shipped 2026-05-19 (aegis-governance v1.2.6 production deploy) | aegis-governance v1.2.6 PR #182 (squash-merge `8aa151d`): bumped verify.uses SHA pin `5b3e2c0` → `cded778` + workflow-level `actions: read` perm + pyproject 1.2.5 → 1.2.6 + CHANGELOG [1.2.6]. Bundled task #170 (4 sub-phase 2 audit findings: GAT-1 runbook + GAT-2 LIKE-pattern fix + others) + task #171 (regression guards). CLAUDE.md §8 Ask-First gate cleared via plan-mode. Tag v1.2.6 → aegis-deploy.yml fires → 6/6 jobs PASS → production aegis-api Cloud Run transitioned v1.2.4 → v1.2.6 (first non-dry-run attested production deploy; decision_id `52689bf3-…`). AEGIS Stage-2 PR-gate decision_id `8e6a4573-…` (PAUSE → override per §28.5.1 routine-deploy precedent). See cosmic-flute §37.21. | aegis-governance v1.2.6 tag → Cloud Run revision atomic-shifted 100% to v1.2.6 |
+| **Sprint 6 / F1 sub-phase 5** | ✅ shipped 2026-05-19 (cosmic-flute §37.21 ship capture) | Sprint 6/F1 SHIP COMPLETE — cosmic-flute §37.21 captures cumulative results across sub-phases 1-4 + lessons learned. Memory breadcrumb bumped to "Sprints 1-6/F1 of 7 SHIPPED". Mark cosmic-flute tasks #30 + #170 + #171 + #174 completed. Sprint 6/F2 + Sprint 7/G1-G3 readiness flipped 🟢 GREEN UNBLOCKED at protocol-correctness layer. | cosmic-flute §37.21 — Sprint 6/F1 SHIPPED capture |
+| **§38 (post-ship CTR-5/U3 closure + forensic-audit chain)** | ✅ shipped 2026-05-21 (aegis-governance v1.2.7 production deploy) | Cumulative 3-PR ship cycle on aegis-governance: PR #183 (`c570505`) primary §38 + PR #184 (`25420ca`) PyPI 1.1.0→1.1.1 yanked-collision hotfix + PR #185 (`f012a33`) Attest job step-order hotfix. Tag v1.2.7 → production transitioned v1.2.6 → v1.2.7. First v1.2.7 production decision_id `302693ce-…`; Tier-4e canonical proof PASS valid=True with REAL pinned keys from aegis-policy@cded778. ADR-013 forensic-audit chain via `aegis_evaluate_decision_id` DB column (Option D — predicate UNCHANGED + envelope wire format BYTE-IDENTICAL with v1.2.6). aegis-sdk 1.1.1 LIVE on PyPI (post yanked-1.1.0-collision PR #184 remediation per §37.14.7 release chain). §17 Critical 3 invariant `bypass_actors=[]` preserved across 9 cumulative sole-keyholder bypass cycles. aegis-policy main UNCHANGED at `cded778` (§38 D2-defer; Sprint 7/G1 task #185 picks up policy `informational_predicate_fields` update). Closes cosmic-flute tasks #196 + #197. See cosmic-flute §38.13. | aegis-governance v1.2.7 tag → Cloud Run revision atomic-shifted 100% to v1.2.7 |
+| **Sprint 6 / F2** | 🟢 GREEN UNBLOCKED — planned | `openclaw-operator-os/scripts/blue-green-deploy.sh` integration (dogfood across 3 substrates per cosmic-flute §11.7). Unblocked at protocol-correctness layer via §38 Option D architecture. | Separate plan + PR (on `openclaw-operator-os`); cosmic-flute task #31 |
+| **Sprint 7 / G1** | 🟢 GREEN UNBLOCKED — planned | Org-level GitHub Ruleset for required `aegis-attestation-verified` status check across all 19 (now 20) portfolio repos. Admin-level operation. NOTE: an attestation-stack-internal Ruleset (`aegis-attestation-required-checks`, id `16294975`) targeting `aegis-*` repos was already created during Sprint 5/E1.5 Phase 7 (2026-05-12); Sprint 7/G1 expands enforcement to the full 19-repo portfolio (`aegis-gtm`, `undercurrent-core`, `LIBERTAS-*`, etc.) AND ships the deferred verifier-kit hardening bundle per cosmic-flute task #185 (F2.2 Node test harness + U1+U2 filename rename hazard + U9/F1.3 try/catch warning + roadmap doc-flips). | Org settings change + aegis-policy hardening PR; cosmic-flute task #32 + #185 |
+| **Sprint 7 / G2** | 🟢 GREEN UNBLOCKED — planned | `aegis-gtm` pilot rollout — first non-aegis-governance consumer. Validates verifier-kit ergonomics for the typical Vercel-deployed website. | Separate plan + PR (on `aegis-gtm`); cosmic-flute task #33 |
+| **Sprint 7 / G3** | 🟢 GREEN UNBLOCKED — planned | Roll out to remaining 18 production-bound repos. Tracked via Linear when Step 2 of the operator-OS plan wires Linear webhook. | Linear epic per repo; cosmic-flute task #34 |
 
 ## Phase 2 (post-Sprint 7) — ecosystem-compat
 
@@ -95,9 +97,43 @@ Out of the rigor-aegis-attestations protocol scope; planned for the cosmos-mixin
         └───────────────┬───────────────────────┘
                         │
                         ▼
-                Sprint 6/F1 sub-phase 4 (aegis-governance v1.2.6 PR)
-                Sprint 6/F2 (openclaw blue-green dogfood)
+        ┌───────────────────────────────────────┐
+        │ QG-§37.18 post-ship audit (✅ shipped) │
+        │ ✅ aegis-policy@cded778                │
+        │ v1.2.2 patch — multi-match dedup +    │
+        │ anchored SELF_REGEX + regression-test │
+        │ refinements + 8 LOW deferrals → #185  │
+        └───────────────┬───────────────────────┘
                         │
                         ▼
-                Sprint 7/G1+G2+G3 (org Ruleset + 20-repo rollout)
+        ┌───────────────────────────────────────┐
+        │ Sprint 6/F1 sub-phase 4 (✅ shipped)   │
+        │ ✅ aegis-governance@8aa151d (v1.2.6)   │
+        │ first non-dry-run production deploy   │
+        │ decision_id 52689bf3-…                │
+        │ closes cosmic-flute #30+#170+#171+#174│
+        │ Sprint 6/F1 SHIP COMPLETE — §37.21    │
+        └───────────────┬───────────────────────┘
+                        │
+                        ▼
+        ┌───────────────────────────────────────┐
+        │ §38 forensic-audit chain (✅ shipped)  │
+        │ ✅ aegis-governance@f012a33 (v1.2.7)   │
+        │ ADR-013 + aegis_evaluate_decision_id  │
+        │ Option D — predicate UNCHANGED        │
+        │ envelope wire format BYTE-IDENTICAL   │
+        │ aegis-sdk 1.1.1 on PyPI               │
+        │ closes cosmic-flute #196 + #197       │
+        │ first v1.2.7 decision_id 302693ce-…  │
+        │ aegis-policy main UNCHANGED at cded778│
+        │ (§38 D2-defer; Sprint 7/G1 #185 picks │
+        │  up informational_predicate_fields)   │
+        └───────────────┬───────────────────────┘
+                        │
+                        ▼
+        🟢 Sprint 6/F2 (openclaw blue-green dogfood)
+        🟢 Sprint 7/G1 (org Ruleset 19-repo rollout + #185 verifier-kit hardening)
+        🟢 Sprint 7/G2 (aegis-gtm pilot)
+        🟢 Sprint 7/G3 (18-repo Linear rollout)
+        ALL UNBLOCKED at architectural-contract layer per §38.13.7
 ```
