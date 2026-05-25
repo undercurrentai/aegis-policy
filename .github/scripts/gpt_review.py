@@ -46,18 +46,104 @@ from __future__ import annotations
 
 import argparse
 import os
+import random
+import re
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import httpx
 
 try:
-    from openai import APIError, OpenAI
+    from openai import (
+        APIError,
+        OpenAI,
+        OpenAIError,
+        RateLimitError,
+    )
 except ImportError as exc:  # pragma: no cover - CI installs openai before running
     sys.stderr.write(
         f"openai SDK not installed: {exc}\n"
         "Install with: pip install 'openai>=2.11'\n"
     )
     sys.exit(2)
+
+if TYPE_CHECKING:
+    from openai.types.responses import Response
+
+
+# --- Helpers (QG-§44 Phase 2 cycle 2) ---
+# Per accepted-findings rows 12 (8e3a1c6b9f24), 14 (1f7e9d3a5c84),
+# 15 (5c2b8a4f6e91), 22 (9b4c7a2e1d68): defense-in-depth sanitizers
+# + safe env parsing + type narrowing.
+
+# Sanitize exception strings before logging — strips OpenAI/Bearer tokens
+# that could leak via str(exc) in older SDK versions or wrapped chains.
+_SECRET_PATTERNS = (
+    re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
+    re.compile(r"Bearer\s+[A-Za-z0-9_.\-]{16,}", re.IGNORECASE),
+)
+
+
+def _safe_exc(exc: BaseException) -> str:
+    """Render exc safely — strips API key prefixes that some SDK versions leak."""
+    text = f"{type(exc).__name__}: {exc}"
+    for pat in _SECRET_PATTERNS:
+        text = pat.sub("<redacted-secret>", text)
+    return text
+
+
+def _int_env(name: str, default: int) -> int:
+    """Parse int env var with a fallback — never raises on malformed input."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        sys.stderr.write(
+            f"gpt_review: ignoring malformed {name}={raw!r}; using default {default}\n"
+        )
+        return default
+
+
+def _sanitize_pr_metadata(value: str) -> str:
+    """Strip control characters + markdown heading markers from PR-supplied strings.
+
+    Per accepted-findings row 15 (5c2b8a4f6e91): PR_TITLE is attacker-controlled
+    (fork PRs can craft titles). The prior implementation interpolated it raw
+    into _build_user_message, creating a second prompt-injection surface beyond
+    the diff itself (compounds with HIGH 9c5e7d3a8b21 untrusted-input partial fix).
+    Sanitize: strip C0 controls, leading '#' headings, backticks, and clamp length.
+    """
+    if not value:
+        return "(none)"
+    # Strip C0 control chars except tab/newline (which we'll then normalize)
+    cleaned = "".join(c for c in value if ord(c) >= 32 or c in ("\t", "\n"))
+    # Collapse newlines + tabs to spaces (PR titles should be single-line)
+    cleaned = re.sub(r"[\r\n\t]+", " ", cleaned)
+    # Strip leading markdown heading markers (#+ space) that could close our
+    # system-prompt sections and inject new ones.
+    cleaned = re.sub(r"^\s*#+\s*", "", cleaned)
+    # Strip triple-backtick fences which could close our diff code block early.
+    cleaned = cleaned.replace("```", "ʼʼʼ")
+    # Clamp length to keep the user message manageable.
+    if len(cleaned) > 256:
+        cleaned = cleaned[:253] + "..."
+    return cleaned.strip() or "(none)"
+
+
+def _backoff_sleep(attempt: int, base: float, max_sleep: float) -> None:
+    """Exponential backoff with jitter — used by polling on transient errors.
+
+    Per accepted-findings row 13 (6a4d8b2c7e15): the prior polling loop slept
+    at a constant interval regardless of error type, producing 300 tight retries
+    over 25 min on HTTP 429. Backoff caps server load + respects rate limits.
+    """
+    delay = min(base * (2**attempt), max_sleep)
+    delay += random.uniform(0, delay / 4)  # ±25% jitter — noqa: S311 (jitter, not crypto)
+    time.sleep(delay)
 
 
 SYSTEM_PROMPT = """\
@@ -190,6 +276,15 @@ gate the merge.
 Short table or bulleted list referencing specific added/removed lines by
 file:line. Use ` ` code spans for identifiers.
 
+## Cross-references verified
+
+You run as text-only without shell access (unlike the Codex CLI half).
+Populate this section with exactly: `_None — gpt-5.4-pro runs text-only
+without shell access; cross-references verified by Codex CLI counterpart._`
+This keeps the section count aligned with the Codex review for apples-to-apples
+comparison by the human reviewer (cosmic-flute §44 Phase 2 cycle 2 finding
+3d1f6e9c8a47 alignment).
+
 ## What I did NOT review
 
 Explicit list of things outside your scope: runtime behavior you could not
@@ -212,11 +307,17 @@ def _read_diff(path: Path) -> str:
 
 
 def _build_user_message(diff_text: str) -> str:
-    pr_number = os.environ.get("PR_NUMBER", "?")
-    pr_title = os.environ.get("PR_TITLE", "(no title)")
-    pr_base = os.environ.get("PR_BASE", "main")
-    pr_head = os.environ.get("PR_HEAD_SHA", "(unknown)")
-    pr_repo = os.environ.get("PR_REPO", "(unknown)")
+    # All PR-supplied env vars are attacker-controlled (fork PRs can craft
+    # arbitrary titles/branch names). Sanitize before interpolating into the
+    # user message to prevent prompt-injection via metadata fields. The diff
+    # itself is wrapped in a fenced code block; sanitization there is handled
+    # by the Security section of SYSTEM_PROMPT (treat-as-data instruction).
+    # Per QG-§44 Phase 2 cycle 2 finding 5c2b8a4f6e91 (MEDIUM/C2).
+    pr_number = _sanitize_pr_metadata(os.environ.get("PR_NUMBER", "?"))
+    pr_title = _sanitize_pr_metadata(os.environ.get("PR_TITLE", "(no title)"))
+    pr_base = _sanitize_pr_metadata(os.environ.get("PR_BASE", "main"))
+    pr_head = _sanitize_pr_metadata(os.environ.get("PR_HEAD_SHA", "(unknown)"))
+    pr_repo = _sanitize_pr_metadata(os.environ.get("PR_REPO", "(unknown)"))
     return (
         f"Repository: {pr_repo}\n"
         f"PR: #{pr_number} — {pr_title}\n"
@@ -230,17 +331,22 @@ def _build_user_message(diff_text: str) -> str:
     )
 
 
-def _extract_text(response: object) -> str:
+def _extract_text(response: Response) -> str:
     """Pull the final text content out of a Responses API result.
 
     The SDK exposes `output_text` as a convenience accessor when the
     response is a single text message. For mixed-output responses (tool
     calls, reasoning items, multi-message final answers) we fall back to
     walking `response.output` and concatenating any text items.
+
+    Typed against openai.types.responses.Response per accepted-findings
+    row 14 (1f7e9d3a5c84): tightens mypy/pyright type-safety while still
+    using getattr for SDK-version forward-compatibility (output shape
+    varies across openai 2.x minor versions).
     """
     output_text = getattr(response, "output_text", None)
     if output_text:
-        return output_text  # type: ignore[no-any-return]
+        return str(output_text)
 
     parts: list[str] = []
     output = getattr(response, "output", None) or []
@@ -251,11 +357,11 @@ def _extract_text(response: object) -> str:
             for c in content:
                 text = getattr(c, "text", None)
                 if text:
-                    parts.append(text)
+                    parts.append(str(text))
         elif item_type == "output_text":
             text = getattr(item, "text", None)
             if text:
-                parts.append(text)
+                parts.append(str(text))
     return "\n".join(p for p in parts if p).strip()
 
 
@@ -265,16 +371,25 @@ def _poll_until_terminal(
     *,
     poll_timeout_seconds: int,
     poll_interval_seconds: int,
-) -> object:
+) -> Response:
+    """Poll for terminal status with exponential backoff on transient errors.
+
+    Per accepted-findings row 13 (6a4d8b2c7e15): a constant 5s interval on
+    HTTP 429 (RateLimitError) produces 300 tight retries over 25 min. Use
+    exponential backoff with jitter on transient errors (RateLimitError +
+    APIConnectionError + APITimeoutError + raw httpx.HTTPError) while
+    keeping the steady-state polling interval unchanged.
+    """
     terminal = {"completed", "failed", "cancelled", "incomplete"}
     deadline = time.monotonic() + poll_timeout_seconds
     last_status = "queued"
+    error_attempt = 0
     while True:
         if time.monotonic() > deadline:
             # Best-effort cancel to free the server-side slot.
             try:
                 client.responses.cancel(response_id)
-            except APIError:
+            except (OpenAIError, httpx.HTTPError, OSError):
                 pass
             raise SystemExit(
                 f"gpt_review: response {response_id} did not reach a terminal state "
@@ -282,10 +397,27 @@ def _poll_until_terminal(
             )
         try:
             current = client.responses.retrieve(response_id)
-        except APIError as exc:
-            sys.stderr.write(f"gpt_review: retrieve failed ({exc}); retrying...\n")
-            time.sleep(poll_interval_seconds)
+        except RateLimitError as exc:
+            # 429 — back off aggressively + honor Retry-After if available.
+            error_attempt += 1
+            sys.stderr.write(
+                f"gpt_review: rate-limited on retrieve ({_safe_exc(exc)}); "
+                f"backoff attempt {error_attempt}\n"
+            )
+            _backoff_sleep(error_attempt, base=poll_interval_seconds, max_sleep=120.0)
             continue
+        except (APIError, httpx.HTTPError, OSError) as exc:
+            # Network / transient API errors — backoff lighter than rate limits.
+            error_attempt += 1
+            sys.stderr.write(
+                f"gpt_review: retrieve failed ({_safe_exc(exc)}); "
+                f"backoff attempt {error_attempt}\n"
+            )
+            _backoff_sleep(error_attempt, base=poll_interval_seconds, max_sleep=60.0)
+            continue
+        # Successful retrieve — reset backoff counter so transient bursts
+        # don't permanently slow steady-state polling.
+        error_attempt = 0
         status = getattr(current, "status", None)
         if status != last_status:
             sys.stderr.write(f"gpt_review: response status: {last_status} -> {status}\n")
@@ -320,16 +452,16 @@ def _fallback_markdown(reason: str) -> str:
     )
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="aegis-policy gpt-5.4-pro second-reviewer gate")
-    parser.add_argument("--diff", type=Path, required=True, help="Path to unified diff file")
-    parser.add_argument("--output", type=Path, required=True, help="Path to write Markdown review")
-    args = parser.parse_args()
-
+def _main_impl(args: argparse.Namespace) -> int:
+    """Body of main(); separated so the top-level safety net in main() can
+    catch any unexpected exception and STILL write a fail-closed fallback.
+    Per accepted-findings row 11 (2b7f9c4e5d83): broaden APIError-only catches
+    to (OpenAIError, httpx.HTTPError, OSError) + add top-level safety net."""
     model = os.environ.get("AEGIS_REVIEW_MODEL", "gpt-5.4-pro")
     effort = os.environ.get("AEGIS_REVIEW_EFFORT", "high")
-    poll_timeout = int(os.environ.get("AEGIS_REVIEW_POLL_TIMEOUT_SECONDS", "1500"))
-    poll_interval = int(os.environ.get("AEGIS_REVIEW_POLL_INTERVAL_SECONDS", "5"))
+    # Use _int_env to never raise on malformed env vars (row 22: 9b4c7a2e1d68).
+    poll_timeout = _int_env("AEGIS_REVIEW_POLL_TIMEOUT_SECONDS", 1500)
+    poll_interval = _int_env("AEGIS_REVIEW_POLL_INTERVAL_SECONDS", 5)
 
     if not os.environ.get("OPENAI_API_KEY"):
         args.output.write_text(
@@ -343,7 +475,7 @@ def main() -> int:
         diff_text = _read_diff(args.diff)
     except SystemExit as exc:
         args.output.write_text(
-            _fallback_markdown(f"failed to read diff: {exc}"), encoding="utf-8"
+            _fallback_markdown(f"failed to read diff: {_safe_exc(exc)}"), encoding="utf-8"
         )
         raise
 
@@ -354,10 +486,19 @@ def main() -> int:
         f"gpt_review: model={model} effort={effort} poll_timeout={poll_timeout}s\n"
     )
 
+    # Per accepted-findings row 14 (1f7e9d3a5c84): the typed kwarg signature is
+    # `Reasoning | Omit | None`, but openai 2.11 doesn't export `Reasoning` from
+    # a stable import path (it moves between openai.types.responses + .shared +
+    # .response_create_params across minor versions). The SDK accepts dict via
+    # Pydantic coercion at runtime, AND we need forward-compat for non-Literal
+    # values like "xhigh" that older Reasoning enums don't include. Cast-to-Any
+    # is the surgical fix: preserves runtime behavior, silences the pyright
+    # diagnostic, documents the typing-limitation rationale inline.
+    reasoning_param: Any = {"effort": effort}
     try:
         initial = client.responses.create(
             model=model,
-            reasoning={"effort": effort},
+            reasoning=reasoning_param,
             background=True,
             store=True,
             instructions=SYSTEM_PROMPT,
@@ -368,11 +509,11 @@ def main() -> int:
                 }
             ],
         )
-    except APIError as exc:
+    except (OpenAIError, httpx.HTTPError, OSError) as exc:
         args.output.write_text(
-            _fallback_markdown(f"responses.create failed: {exc}"), encoding="utf-8"
+            _fallback_markdown(f"responses.create failed: {_safe_exc(exc)}"), encoding="utf-8"
         )
-        sys.stderr.write(f"gpt_review: create failed: {exc}\n")
+        sys.stderr.write(f"gpt_review: create failed: {_safe_exc(exc)}\n")
         return 3
 
     response_id = getattr(initial, "id", None)
@@ -393,7 +534,7 @@ def main() -> int:
         )
     except SystemExit as exc:
         args.output.write_text(
-            _fallback_markdown(f"polling failed: {exc}"), encoding="utf-8"
+            _fallback_markdown(f"polling failed: {_safe_exc(exc)}"), encoding="utf-8"
         )
         raise
 
@@ -419,6 +560,48 @@ def main() -> int:
         f"gpt_review: wrote {len(markdown)} chars to {args.output}\n"
     )
     return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="aegis-policy gpt-5.4-pro second-reviewer gate")
+    parser.add_argument("--diff", type=Path, required=True, help="Path to unified diff file")
+    parser.add_argument("--output", type=Path, required=True, help="Path to write Markdown review")
+    args = parser.parse_args()
+
+    # Top-level safety net per accepted-findings row 11 (2b7f9c4e5d83). When
+    # ai-second-review.yml Phase 2 removes continue-on-error: true, ANY unhandled
+    # exception from this script must STILL produce a fail-closed REQUEST_CHANGES
+    # fallback file so the workflow's verdict parser sees a deterministic verdict
+    # rather than an empty/missing output (which would route through the parser's
+    # fail-closed "unrecognised" branch — same end result but less observable).
+    try:
+        return _main_impl(args)
+    except SystemExit:
+        # Already wrote a fallback via _read_diff/_poll_until_terminal handlers.
+        raise
+    except KeyboardInterrupt:
+        # CI runners may signal — preserve fail-closed semantics.
+        try:
+            args.output.write_text(
+                _fallback_markdown("interrupted by signal"), encoding="utf-8"
+            )
+        except OSError:  # pragma: no cover — defense in depth
+            pass
+        raise
+    except Exception as exc:  # noqa: BLE001 - intentional broad safety net
+        sys.stderr.write(
+            f"gpt_review: UNEXPECTED EXCEPTION (safety net engaged): {_safe_exc(exc)}\n"
+        )
+        try:
+            args.output.write_text(
+                _fallback_markdown(f"unexpected internal error: {_safe_exc(exc)}"),
+                encoding="utf-8",
+            )
+        except OSError as write_exc:  # pragma: no cover — defense in depth
+            sys.stderr.write(
+                f"gpt_review: FAILED TO WRITE FALLBACK: {_safe_exc(write_exc)}\n"
+            )
+        return 99
 
 
 if __name__ == "__main__":

@@ -67,17 +67,31 @@ on:
 permissions:
   contents: read
   pull-requests: write  # post PR comments
-  id-token: write       # required by anthropics/claude-code-action@v1 (OIDC)
+  # NOTE: id-token: write is NOT granted at workflow level — only claude-review
+  # needs it (for OIDC into anthropics/claude-code-action@v1). Per QG-§44 Phase 2
+  # cycle 2 finding e8b4c91d2670 (MEDIUM/C2): least-privilege per §17 Critical 3
+  # — gpt-review + codex-review don't need id-token, so don't grant it.
 
 concurrency:
   # Cancel superseded runs if the PR is updated mid-review — no point
-  # reviewing a stale diff.
-  group: ai-second-review-${{ github.event.pull_request.number }}
+  # reviewing a stale diff. Group includes PR head SHA per QG-§44 Phase 2
+  # cycle 2 finding 4d70e93a8b5c (MEDIUM/C3): SHA-independent marker created
+  # a stale-verdict-on-wrong-SHA risk during fast-iteration PR updates where
+  # cancellation-in-flight could leave a verdict-comment pointing at an
+  # older SHA. Embedding the head SHA makes the group SHA-specific.
+  group: ai-second-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
   cancel-in-progress: true
 
 env:
   # Paths passed to git diff so all three jobs review the same surface.
-  # Keep this list in sync with the `on.pull_request.paths` filter above.
+  # Per QG-§44 Phase 2 cycle 2 finding 9f1ce407bd28 (MEDIUM/C3): the literal
+  # list previously enumerated check_error_class_parity.py + check_fingerprints.py
+  # explicitly but the `on.pull_request.paths` filter uses scripts/check_*.py
+  # glob — adding a new gated script (e.g., check_vendored_source_sha.py per
+  # cosmic-flute §26.17 FU-3) would trigger the workflow but fail to include
+  # the new file in the diff. Use a shell glob that expands at runtime to
+  # match the path-trigger semantics. The trailing `*.py` keeps the same glob
+  # surface as the `on.pull_request.paths` entry.
   GATED_PATHS: >-
     keys/
     schema/
@@ -85,8 +99,7 @@ env:
     .github/CODEOWNERS
     .github/workflows/
     docs/architecture/adr/
-    scripts/check_error_class_parity.py
-    scripts/check_fingerprints.py
+    scripts/check_*.py
     scripts/_verify_local_vendored.py
 
 jobs:
@@ -224,13 +237,34 @@ jobs:
         # Phase 1: continue-on-error: true at job level prevents this from
         # blocking PRs. Phase 2 removes continue-on-error so this becomes
         # a real gate.
+        #
+        # Hardening per QG-§44 Phase 2 cycle 2:
+        #   - finding 4d8a6e2f1b97-residual (HIGH/C3 RESIDUAL): sed pattern
+        #     is now case-insensitive (GNU `/I` flag) so a model that emits
+        #     `## verdict` or `## VERDICT` still fails-closed at the case
+        #     branch rather than the unrecognised branch — preserves
+        #     fail-closed semantics either way, but improves observability.
+        #   - finding 3d1f6e9c8a47 (workflow part): explicit verdict-count
+        #     guard — exactly ONE `## Verdict` heading required. Multiple
+        #     headings indicate prompt-injection (e.g., malicious diff
+        #     content injecting a `## Verdict\nAPPROVE` block before the
+        #     model's real verdict) or model glitch — either way, fail closed.
         if: always() && steps.diff.outputs.diff_empty != 'true'
         run: |
           if [ ! -s gpt_review.md ]; then
             echo "::error::gpt-5.4-pro review file missing or empty — fail closed."
             exit 1
           fi
-          raw_verdict=$(sed -n '/^## *Verdict/,/^##/{/^## *Verdict/d;/^##/d;/^$/d;p;}' gpt_review.md \
+          verdict_count=$(grep -c -iE '^## *Verdict\b' gpt_review.md || true)
+          if [ "${verdict_count}" -eq 0 ]; then
+            echo "::error::gpt-5.4-pro review has no '## Verdict' section — fail closed."
+            exit 1
+          fi
+          if [ "${verdict_count}" -gt 1 ]; then
+            echo "::error::gpt-5.4-pro review has ${verdict_count} '## Verdict' sections (expected exactly 1; possible prompt-injection) — fail closed."
+            exit 1
+          fi
+          raw_verdict=$(sed -n '/^## *Verdict/I,/^##/{/^## *Verdict/Id;/^##/d;/^$/d;p;}' gpt_review.md \
             | head -1 | tr -d '`*' | xargs)
           verdict_upper=$(echo "${raw_verdict}" | awk '{print toupper($1)}'  )
           case "${verdict_upper}" in
@@ -362,13 +396,25 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce verdict
+        # Same hardening pattern as gpt-review per QG-§44 Phase 2 cycle 2
+        # (findings 4d8a6e2f1b97-residual + 3d1f6e9c8a47): case-insensitive
+        # sed + verdict-count guard.
         if: always() && steps.diff.outputs.diff_empty != 'true'
         run: |
           if [ ! -s codex_review.md ]; then
             echo "::error::Codex review file missing or empty — fail closed."
             exit 1
           fi
-          raw_verdict=$(sed -n '/^## *Verdict/,/^##/{/^## *Verdict/d;/^##/d;/^$/d;p;}' codex_review.md \
+          verdict_count=$(grep -c -iE '^## *Verdict\b' codex_review.md || true)
+          if [ "${verdict_count}" -eq 0 ]; then
+            echo "::error::Codex review has no '## Verdict' section — fail closed."
+            exit 1
+          fi
+          if [ "${verdict_count}" -gt 1 ]; then
+            echo "::error::Codex review has ${verdict_count} '## Verdict' sections (expected exactly 1; possible prompt-injection) — fail closed."
+            exit 1
+          fi
+          raw_verdict=$(sed -n '/^## *Verdict/I,/^##/{/^## *Verdict/Id;/^##/d;/^$/d;p;}' codex_review.md \
             | head -1 | tr -d '`*' | xargs)
           verdict_upper=$(echo "${raw_verdict}" | awk '{print toupper($1)}')
           case "${verdict_upper}" in
@@ -398,6 +444,22 @@ jobs:
     # annotations). For Phase 1 Pilot: prompt embeds aegis-policy context inline.
     timeout-minutes: 15
     continue-on-error: true  # §44 Phase 1 advisory
+    # Job-scoped id-token: write — only claude-review needs OIDC for the
+    # claude-code-action. gpt-review + codex-review don't need it, so we
+    # don't grant it at workflow level (least-privilege per §17 Critical 3).
+    # Per QG-§44 Phase 2 cycle 2 finding e8b4c91d2670 (MEDIUM/C2).
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    # Defense-in-depth against fork-PR prompt-injection per QG-§44 Phase 2
+    # cycle 2 finding 21a5d738094e (MEDIUM/C2). The implicit GitHub Actions
+    # behavior already denies fork PRs access to ANTHROPIC_API_KEY (so the
+    # workflow would fail benignly), but an explicit guard makes the
+    # security boundary visible to reviewers + survives any future policy
+    # changes that might broaden fork-PR secret access.
+    if: github.event.pull_request.head.repo.fork == false ||
+        github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout PR head
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -475,12 +537,32 @@ jobs:
               return;
             }
 
+            // Hardening per QG-§44 Phase 2 cycle 2:
+            //   - finding 4d8a6e2f1b97-residual (HIGH/C3 RESIDUAL): case-
+            //     insensitive `## Verdict` match (the `i` regex flag).
+            //   - finding 3d1f6e9c8a47 (workflow part): verdict-count guard
+            //     — exactly ONE `## Verdict` heading required.
+            const verdictHeadingRe = /^## *Verdict\b/im;
+            const verdictHeadingReGlobal = /^## *Verdict\b/gim;
+            const headingMatches = review.body.match(verdictHeadingReGlobal) || [];
+            if (headingMatches.length === 0) {
+              core.setFailed('Claude review has no "## Verdict" section — fail closed.');
+              return;
+            }
+            if (headingMatches.length > 1) {
+              core.setFailed(
+                `Claude review has ${headingMatches.length} "## Verdict" sections ` +
+                '(expected exactly 1; possible prompt-injection) — fail closed.'
+              );
+              return;
+            }
+
             // Extract verdict: first non-empty line after "## Verdict"
             const lines = review.body.split('\n');
             let inVerdict = false;
             let verdict = '';
             for (const line of lines) {
-              if (/^## *Verdict/.test(line)) { inVerdict = true; continue; }
+              if (verdictHeadingRe.test(line)) { inVerdict = true; continue; }
               if (inVerdict && /^##/.test(line)) break;
               if (inVerdict && line.trim()) {
                 verdict = line.replace(/[`*]/g, '').trim().split(/\s/)[0].toUpperCase();
