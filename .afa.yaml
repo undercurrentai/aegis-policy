@@ -30,7 +30,16 @@ analysis:
     - "scripts/_verify_local_vendored.py"
     # Trust-spine paths — AFA analysis advisory only; mutations forbidden per
     # CODEOWNERS + cosmic-flute §44.4 trust-spine carve-out.
+    # Defense-in-depth: exclude ALL §44.4 trust-spine roots (per QG-§44 Phase 2
+    # cycle 1 finding a3f1b88e2c5d — keys/** alone is insufficient; policy/**
+    # carries verifier-policy-v1.yaml required_keyids fingerprints; schema/**
+    # carries attestation_predicate_v1.yaml frozen-tag invariant).
     - "keys/**"
+    - "policy/**"
+    - "schema/**"
+    # Structural-protected scripts (gated paths per ai-second-review.yml + parity gates).
+    - "scripts/check_fingerprints.py"
+    - "scripts/check_error_class_parity.py"
   max_function_size: 500
 enhancement:
   max_candidates: 3
