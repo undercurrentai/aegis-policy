@@ -75,7 +75,7 @@ Use your shell tools to **verify** any claim before you make it. You have
 the full repo — don't guess. Specifically:
 
 1. When the diff touches `keys/`, run `shasum -a 256 keys/ed25519-public.pem`
-   + cross-check `policy/verifier-policy-v1.yaml required_keyids.ed25519`.
+   then cross-check `policy/verifier-policy-v1.yaml required_keyids.ed25519`.
    Mismatch = trust-spine break (CRITICAL).
 2. When the diff touches `scripts/_verify_local_vendored.py`, grep for the
    `VENDORED from aegis-governance@` header line + verify the SHA still
