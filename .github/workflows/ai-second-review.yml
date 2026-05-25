@@ -48,6 +48,32 @@ name: AI Second Review
 #                         same key).
 #   - ANTHROPIC_API_KEY : Anthropic API key for claude-review. Bills to
 #                         the Anthropic org that generated the key.
+#
+# Trigger choice: `on: pull_request` (NOT `pull_request_target`).
+# Per GitHub Security Lab (2021+2025) + Sysdig (2025-06-17) + Paul Serban
+# (2025-12-23) — research consulted per cosmic-flute §43.5 M1 Remediation
+# Protocol — naive migration to `pull_request_target` is STRICTLY MORE
+# DANGEROUS, not safer: combined with PR-head checkout it's the canonical
+# "pwn request" attack pattern (runs in BASE context with secrets + write
+# perms; bypasses approval gates; same-fork-checkout exfiltrates secrets).
+# DO NOT migrate to `pull_request_target` as the naive fix to the script-
+# injection class concern flagged by gpt-5.4-pro in P1.5 baseline #1
+# (cosmic-flute §44.20).
+#
+# Known threat-model deferral (P1.5 baseline #1 — see cosmic-flute §44.20):
+# this workflow currently checks out PR HEAD and executes scripts/prompts
+# from there (`.github/scripts/gpt_review.py`, `.github/codex/prompts/
+# second-review.md`, `Bash(python3 scripts/check_*.py)` allowedTools). A
+# same-repo PR could in principle modify these to exfiltrate API keys. For
+# aegis-policy single-keyholder state (ADR-001), the threat is bounded:
+# only writers can create same-repo PRs, and writers already have direct
+# API-key access via git/secrets/local-env. The finding becomes HIGH/C2 at
+# Sprint 7/G2-G3 when contributor surface broadens. CORRECT mitigation
+# (deferred to task #185 Sprint 7/G1 hardening bundle, BEFORE G2-G3
+# onboarding) is the dual-checkout pattern under `on: pull_request`:
+# checkout BASE for scripts/prompts (trusted); fetch PR head as separate
+# ref for diff content only (DATA never executed). Template ready in
+# cosmic-flute §44.20.5 (bootstrap-safe; lands post-§44-Phase-1-merge).
 
 on:
   pull_request:
