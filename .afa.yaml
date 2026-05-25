@@ -1,0 +1,40 @@
+version: "1.0"
+# AFA (Autonomous Function Amplifier) configuration for aegis-policy.
+# Per cosmic-flute §44.16: AFA is the 5th signal source in the §44 second-reviewer
+# stack (alongside gpt-5.4-pro + gpt-5.3-codex + claude-opus-4-6 qualitative
+# reviewers + AEGIS Stage-2 evaluation). AFA's existing afa-gate-check GitHub
+# App reads this config when posting PR check-runs; the aggregator-approve job
+# (Phase 2 deliverable) reads AFA's check-run conclusion as a prerequisite gate.
+#
+# Trust model: aegis-policy is the verifier-kit + trust-roots repo (cosmic-flute
+# §17 Critical 3). AFA analysis-only on this repo; auto_commit FALSE; AFA never
+# modifies code in this trust-spine repository.
+#
+# Mirrors aegis-governance's .afa.yaml structure (§41.3 Agent B finding) with
+# aegis-policy-specific path exclusions.
+model:
+  provider: gemini
+  model: gemini-3-flash-preview
+  fallback_chain:
+    - gemini/gemini-2.5-flash
+analysis:
+  languages: [python, yaml, markdown]
+  exclude:
+    - "tests/**"
+    - "docs/**"
+    - "node_modules/**"
+    - "Archive/**"
+    # Vendored from aegis-governance@<sha> per scripts/_verify_local_vendored.py
+    # header invariant — must remain byte-identical to upstream; AFA should NOT
+    # propose enhancements that would break the parity gate (check_error_class_parity.py).
+    - "scripts/_verify_local_vendored.py"
+    # Trust-spine paths — AFA analysis advisory only; mutations forbidden per
+    # CODEOWNERS + cosmic-flute §44.4 trust-spine carve-out.
+    - "keys/**"
+  max_function_size: 500
+enhancement:
+  max_candidates: 3
+  auto_commit: false  # NEVER auto-commit in trust-spine repo per §44.4 carve-out
+  branch_prefix: "afa/"
+cost:
+  monthly_budget: 25.0  # smaller than aegis-governance's $50 since aegis-policy is config + scripts, not application code

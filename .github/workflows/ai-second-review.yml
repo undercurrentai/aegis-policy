@@ -1,0 +1,519 @@
+name: AI Second Review
+
+# Automated tri-AI second-reviewer gate for aegis-policy structural-protected paths.
+# Cosmic-flute §44 Phase 1 (Pilot). Ported from AIPEA's ai-second-review.yml
+# (Wave C1, 2026-04-11) with aegis-policy-specific path filters + domain-adapted
+# reviewer prompts.
+#
+# Purpose: provide unanimous-3-AI consensus review as one of the 5 signals
+# (AI gpt + AI codex + AI claude + AFA gate-check + AEGIS Stage-2 PROCEED) that
+# the §44 aggregator-approve job (Phase 2 deliverable) will gate on. Together
+# they substitute for the missing second human reviewer + retire the §34.17.2
+# sole-keyholder bypass cycle for routine PRs.
+#
+# §44 PHASE 1 SCOPE — ADVISORY ONLY:
+#   - All 3 reviewer jobs run with `continue-on-error: true`
+#   - NO aggregator-approve job (that lands in Phase 2)
+#   - NO machine-user CODEOWNER change (Phase 2)
+#   - NO org-Ruleset modification (Phase 4)
+#   - Goal: validate verdict-parsing + secret config + Blacksmith runner
+#     availability on ~3 PRs; capture inter-model verdict-agreement rate
+#     baseline per cosmic-flute §44.17 Claude objection #2.
+#
+# Mechanism: when a pull request touches any path in the `paths:` filter
+# below, three parallel jobs run against the PR diff:
+#
+#   - gpt-review    : calls gpt-5.4-pro via the OpenAI Responses API in
+#                     background mode with reasoning effort=high, then
+#                     polls for completion. Posts findings as a PR
+#                     comment and writes them to the job summary.
+#
+#   - codex-review  : uses the official openai/codex-action@v1, which
+#                     installs the Codex CLI, starts a Responses-API
+#                     proxy, and runs `codex exec` in read-only sandbox
+#                     mode against the diff. Posts a second PR comment.
+#
+#   - claude-review : uses the official anthropics/claude-code-action@v1.
+#                     Reads the repo's existing structure for context
+#                     (no CLAUDE.md exists yet in aegis-policy — Claude
+#                     references cosmic-flute via path; future hardening
+#                     may add CLAUDE.md per §44.16 — task #229 area).
+#                     Posts a third PR comment.
+#
+# Required repo secrets (set via `gh secret set`):
+#
+#   - OPENAI_API_KEY    : OpenAI API key with gpt-5.4-pro access. Used
+#                         by gpt-review and codex-review (codex-action
+#                         starts its own Responses API proxy from the
+#                         same key).
+#   - ANTHROPIC_API_KEY : Anthropic API key for claude-review. Bills to
+#                         the Anthropic org that generated the key.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      # aegis-policy structural-protected paths per cosmic-flute §44.4 +
+      # existing .github/CODEOWNERS entries
+      - "keys/**"
+      - "schema/**"
+      - "policy/**"
+      - ".github/CODEOWNERS"
+      - ".github/workflows/**"
+      - "docs/architecture/adr/**"
+      - "scripts/check_*.py"
+      - "scripts/_verify_local_vendored.py"
+
+permissions:
+  contents: read
+  pull-requests: write  # post PR comments
+  id-token: write       # required by anthropics/claude-code-action@v1 (OIDC)
+
+concurrency:
+  # Cancel superseded runs if the PR is updated mid-review — no point
+  # reviewing a stale diff.
+  group: ai-second-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  # Paths passed to git diff so all three jobs review the same surface.
+  # Keep this list in sync with the `on.pull_request.paths` filter above.
+  GATED_PATHS: >-
+    keys/
+    schema/
+    policy/
+    .github/CODEOWNERS
+    .github/workflows/
+    docs/architecture/adr/
+    scripts/check_error_class_parity.py
+    scripts/check_fingerprints.py
+    scripts/_verify_local_vendored.py
+
+jobs:
+  gpt-review:
+    name: AI Second Review / gpt-5.4-pro
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # gpt-5.4-pro at effort=high on a real trust-spine diff can take 5-15
+    # minutes. 30 minutes leaves headroom for polling overhead and the
+    # openai>=2.11 install step.
+    timeout-minutes: 30
+    # §44 Phase 1 PILOT — advisory only. Phase 2+ removes this when
+    # aggregator-approve lands and consumes the verdict for binding approval.
+    continue-on-error: true
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch base ref
+        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+
+      - name: Compute diff against base
+        id: diff
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.ref }}"
+          # shellcheck disable=SC2086  # word-splitting GATED_PATHS is intentional
+          git diff "origin/${base}...HEAD" -- ${GATED_PATHS} > pr_diff.patch
+          if [ ! -s pr_diff.patch ]; then
+            echo "diff_empty=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          diff_bytes=$(wc -c < pr_diff.patch)
+          echo "diff_bytes=${diff_bytes}" >> "$GITHUB_OUTPUT"
+          echo "PR diff: ${diff_bytes} bytes"
+          # Cap diff at ~200 KB to keep well under the model's context
+          # budget even after system prompt + reasoning tokens.
+          if [ "${diff_bytes}" -gt 204800 ]; then
+            head -c 204800 pr_diff.patch > pr_diff.truncated
+            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> pr_diff.truncated
+            mv pr_diff.truncated pr_diff.patch
+            echo "diff_truncated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install OpenAI SDK
+        if: steps.diff.outputs.diff_empty != 'true'
+        run: pip install --quiet "openai>=2.11"
+
+      - name: Run gpt-5.4-pro review
+        if: steps.diff.outputs.diff_empty != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_REPO: ${{ github.repository }}
+          AEGIS_REVIEW_MODEL: gpt-5.4-pro
+          AEGIS_REVIEW_EFFORT: high
+          AEGIS_REVIEW_POLL_TIMEOUT_SECONDS: "1500"  # 25 minutes
+          AEGIS_REVIEW_POLL_INTERVAL_SECONDS: "5"
+        run: |
+          python .github/scripts/gpt_review.py \
+            --diff pr_diff.patch \
+            --output gpt_review.md
+
+      - name: Load review body into env
+        # always() so a failed review step still posts the fallback
+        # markdown that gpt_review.py writes before exiting non-zero.
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        run: |
+          if [ ! -s gpt_review.md ]; then
+            printf '_Review produced no output. Check the workflow logs for details._\n' > gpt_review.md
+          fi
+          delimiter="__AEGIS_REVIEW_BODY_EOF_${{ github.run_id }}__"
+          {
+            printf '%s<<%s\n' "REVIEW_BODY" "${delimiter}"
+            cat gpt_review.md
+            printf '\n%s\n' "${delimiter}"
+          } >> "$GITHUB_ENV"
+
+      - name: Post review comment (gpt-5.4-pro)
+        # always() so failures are still communicated via PR comment.
+        # The job itself still exits non-zero because the earlier
+        # review step failed — fail-closed semantics are preserved.
+        # Phase 1: continue-on-error: true at job level still records the
+        # red status; Phase 2 will remove continue-on-error when aggregator
+        # consumes the verdict for binding approval.
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const body = process.env.REVIEW_BODY || '(review produced no output)';
+            const marker = '<!-- ai-second-review:gpt -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const header = '## 🤖 gpt-5.4-pro — Second-Reviewer Gate (§44 Phase 1 Pilot — ADVISORY)';
+            const footer = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1 — Pilot). '
+                         + 'Accountable human reviewer: @ThermoclineLeviathan. '
+                         + 'Phase 1 is ADVISORY ONLY (continue-on-error: true). '
+                         + 'Phase 2+ adds aggregator-approve job that consumes 3/3 unanimous verdict + AFA gate-check + AEGIS Stage-2 PROCEED for binding approval per §44.4 Option D.*';
+            const full = `${marker}\n\n${header}\n\n${body}\n\n${footer}`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: full });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: full });
+            }
+
+      - name: Write review to job summary
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        run: |
+          {
+            printf '## gpt-5.4-pro — Second-Reviewer Gate (§44 Phase 1 Pilot)\n\n'
+            if [ -s gpt_review.md ]; then
+              cat gpt_review.md
+            else
+              printf '_Review produced no output (check logs)._\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce verdict
+        # Fail-closed: missing/empty review or REQUEST_CHANGES both block.
+        # Only explicit APPROVE or COMMENT passes the gate.
+        # Phase 1: continue-on-error: true at job level prevents this from
+        # blocking PRs. Phase 2 removes continue-on-error so this becomes
+        # a real gate.
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        run: |
+          if [ ! -s gpt_review.md ]; then
+            echo "::error::gpt-5.4-pro review file missing or empty — fail closed."
+            exit 1
+          fi
+          raw_verdict=$(sed -n '/^## *Verdict/,/^##/{/^## *Verdict/d;/^##/d;/^$/d;p;}' gpt_review.md \
+            | head -1 | tr -d '`*' | xargs)
+          verdict_upper=$(echo "${raw_verdict}" | awk '{print toupper($1)}'  )
+          case "${verdict_upper}" in
+            APPROVE|COMMENT)
+              echo "Verdict: ${verdict_upper} (raw: ${raw_verdict}) — no blocking concerns."
+              ;;
+            REQUEST_CHANGES)
+              echo "::error::gpt-5.4-pro verdict: REQUEST_CHANGES — PR must address blocking concerns before merge."
+              exit 1
+              ;;
+            *)
+              echo "::error::gpt-5.4-pro verdict '${verdict_upper}' (raw: '${raw_verdict:-<empty>}') not recognised — fail closed."
+              exit 1
+              ;;
+          esac
+
+      - name: No-op for empty diff
+        if: steps.diff.outputs.diff_empty == 'true'
+        run: echo "PR diff is empty against the base ref — nothing to review."
+
+  codex-review:
+    name: AI Second Review / Codex CLI
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Codex's shell-exploration phase on a trust-spine diff runs longer than
+    # a pure-model review. 30 minutes gives us headroom on tough diffs.
+    timeout-minutes: 30
+    continue-on-error: true  # §44 Phase 1 advisory
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch base ref
+        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+
+      - name: Compute diff against base
+        id: diff
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.ref }}"
+          # shellcheck disable=SC2086
+          git diff "origin/${base}...HEAD" -- ${GATED_PATHS} > pr_diff.patch
+          if [ ! -s pr_diff.patch ]; then
+            echo "diff_empty=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          diff_bytes=$(wc -c < pr_diff.patch)
+          echo "PR diff: ${diff_bytes} bytes"
+          if [ "${diff_bytes}" -gt 204800 ]; then
+            head -c 204800 pr_diff.patch > pr_diff.truncated
+            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> pr_diff.truncated
+            mv pr_diff.truncated pr_diff.patch
+          fi
+
+      - name: Run Codex review
+        id: codex
+        if: steps.diff.outputs.diff_empty != 'true'
+        # Official OpenAI action. Installs the Codex CLI, starts a
+        # Responses-API proxy from the OPENAI_API_KEY input, and runs
+        # `codex exec` under the chosen sandbox strategy.
+        uses: openai/codex-action@0b91f4a2703c23df3102c3f0967d3c6db34eedef # v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/second-review.md
+          output-file: codex_review.md
+          # gpt-5.3-codex is OpenAI's "primary choice for coding and
+          # development tasks" — specialized for agentic coding, code
+          # editing, and tool-heavy workflows.
+          model: gpt-5.3-codex
+          effort: high
+          sandbox: read-only
+          # safety-strategy: read-only avoids the `drop-sudo` verification
+          # check that fails on Blacksmith runners (where sudo remains
+          # passwordless via /etc/sudoers.d entries even after
+          # `deluser runner sudo`). `read-only` executes Codex in a
+          # read-only mount without touching sudo at all.
+          safety-strategy: read-only
+
+      - name: Load review body into env
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        run: |
+          if [ ! -s codex_review.md ]; then
+            printf '_Codex review produced no output. Check the workflow logs for details._\n' > codex_review.md
+          fi
+          delimiter="__AEGIS_REVIEW_BODY_EOF_${{ github.run_id }}__"
+          {
+            printf '%s<<%s\n' "REVIEW_BODY" "${delimiter}"
+            cat codex_review.md
+            printf '\n%s\n' "${delimiter}"
+          } >> "$GITHUB_ENV"
+
+      - name: Post review comment (Codex)
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const body = process.env.REVIEW_BODY || '(review produced no output)';
+            const marker = '<!-- ai-second-review:codex -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const header = '## 🤖 Codex CLI (gpt-5.3-codex) — Second-Reviewer Gate (§44 Phase 1 Pilot — ADVISORY)';
+            const footer = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1 — Pilot). '
+                         + 'Accountable human reviewer: @ThermoclineLeviathan. '
+                         + 'Phase 1 is ADVISORY ONLY (continue-on-error: true). '
+                         + 'Phase 2+ adds aggregator-approve job for binding approval.*';
+            const full = `${marker}\n\n${header}\n\n${body}\n\n${footer}`;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: full });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: full });
+            }
+
+      - name: Write review to job summary
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        run: |
+          {
+            printf '## Codex CLI — Second-Reviewer Gate (§44 Phase 1 Pilot)\n\n'
+            if [ -s codex_review.md ]; then
+              cat codex_review.md
+            else
+              printf '_Codex review produced no output (check logs)._\n'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce verdict
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        run: |
+          if [ ! -s codex_review.md ]; then
+            echo "::error::Codex review file missing or empty — fail closed."
+            exit 1
+          fi
+          raw_verdict=$(sed -n '/^## *Verdict/,/^##/{/^## *Verdict/d;/^##/d;/^$/d;p;}' codex_review.md \
+            | head -1 | tr -d '`*' | xargs)
+          verdict_upper=$(echo "${raw_verdict}" | awk '{print toupper($1)}')
+          case "${verdict_upper}" in
+            APPROVE|COMMENT)
+              echo "Verdict: ${verdict_upper} (raw: ${raw_verdict}) — no blocking concerns."
+              ;;
+            REQUEST_CHANGES)
+              echo "::error::Codex verdict: REQUEST_CHANGES — PR must address blocking concerns before merge."
+              exit 1
+              ;;
+            *)
+              echo "::error::Codex verdict '${verdict_upper}' (raw: '${raw_verdict:-<empty>}') not recognised — fail closed."
+              exit 1
+              ;;
+          esac
+
+      - name: No-op for empty diff
+        if: steps.diff.outputs.diff_empty == 'true'
+        run: echo "PR diff is empty against the base ref — nothing to review."
+
+  claude-review:
+    name: AI Second Review / Claude Opus 4.6
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Uses the official claude-code-action. Claude reads repository structure
+    # for context. aegis-policy doesn't yet have a CLAUDE.md (future hardening
+    # opportunity per §44.16 — separate from task #229 ADR-amendment-chain
+    # annotations). For Phase 1 Pilot: prompt embeds aegis-policy context inline.
+    timeout-minutes: 15
+    continue-on-error: true  # §44 Phase 1 advisory
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Run Claude review
+        id: claude
+        uses: anthropics/claude-code-action@c7c8889b30499b4e46f4c32b892e43cd364bc2fe # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            You are the Claude half of aegis-policy's tri-AI second-reviewer
+            gate (cosmic-flute §44 Phase 1 Pilot). Your counterparts are
+            gpt-5.4-pro and Codex CLI (gpt-5.3-codex). All three reviews
+            must pass before the §44 Phase 2 aggregator-approve job can
+            post binding approval; Phase 1 is ADVISORY ONLY.
+
+            aegis-policy is the verifier-kit + trust-roots repo for
+            undercurrentai's AEGIS attestation infrastructure
+            (cosmic-flute §17 Critical 3, §28.17, §44). This PR touches
+            structural-protected paths. Review the changes with focus on:
+
+            - Trust-spine integrity (keys/ed25519-public.pem + keys/mldsa65-public.bin
+              fingerprints MUST match policy/verifier-policy-v1.yaml
+              required_keyids per cosmic-flute §28.17 + scripts/check_fingerprints.py)
+            - Vendored byte-identity (scripts/_verify_local_vendored.py
+              tail-content MUST match aegis-governance@<header-SHA>:aegis-sdk/src/aegis/_verify_local.py
+              per §26.17 FU-3)
+            - Error-class taxonomy parity (policy/verifier-policy-v1.yaml
+              fail_closed_on 15-vs-15 invariant per scripts/check_error_class_parity.py)
+            - SHA-pinning on .github/workflows/** uses: lines
+              (permitted exception: openai/codex-action@v1)
+            - bypass_actors=[] preserved on org-Ruleset 16294975 per §17 Critical 3
+            - ADR-001 trust model + ADR-002 key ceremony + ADR-003 algorithm migration alignment
+            - scope creep: changes outside gated paths bundled with trust-spine changes
+
+            Post your review as a SINGLE PR comment using:
+            gh pr comment ${{ github.event.pull_request.number }} --body "YOUR REVIEW"
+
+            Your review comment MUST start with <!-- ai-second-review:claude -->
+            and include these sections in order:
+            ## Verdict
+            One of: APPROVE, REQUEST_CHANGES, COMMENT.
+            ## Blocking concerns
+            Bulleted list with file:line evidence. _None._ if APPROVE/COMMENT.
+            ## Non-blocking observations
+            ## Specific line callouts
+            ## What I did NOT review
+          claude_args: |
+            --model claude-opus-4-6 --allowedTools "Read,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(cat pr_diff.patch),Bash(shasum -a 256 keys/*),Bash(python3 scripts/check_error_class_parity.py),Bash(python3 scripts/check_fingerprints.py)"
+
+      - name: Scrape verdict from PR comment
+        if: always()
+        id: verdict
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const marker = '<!-- ai-second-review:claude -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const review = comments
+              .filter((c) => c.body && c.body.includes(marker))
+              .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))[0];
+
+            if (!review) {
+              core.setFailed('Claude review comment not found — fail closed.');
+              return;
+            }
+
+            // Extract verdict: first non-empty line after "## Verdict"
+            const lines = review.body.split('\n');
+            let inVerdict = false;
+            let verdict = '';
+            for (const line of lines) {
+              if (/^## *Verdict/.test(line)) { inVerdict = true; continue; }
+              if (inVerdict && /^##/.test(line)) break;
+              if (inVerdict && line.trim()) {
+                verdict = line.replace(/[`*]/g, '').trim().split(/\s/)[0].toUpperCase();
+                break;
+              }
+            }
+
+            core.info(`Claude verdict: ${verdict}`);
+            core.setOutput('verdict', verdict);
+
+            // Write review to job summary
+            const header = '## 🤖 Claude Opus 4.6 — Second-Reviewer Gate (§44 Phase 1 Pilot)';
+            const footer = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1 — Pilot). Accountable human reviewer: @ThermoclineLeviathan.*';
+            await core.summary.addRaw(`${header}\n\n${review.body}\n\n${footer}`).write();
+
+      - name: Enforce verdict
+        if: always()
+        run: |
+          verdict="${{ steps.verdict.outputs.verdict }}"
+          case "${verdict}" in
+            APPROVE|COMMENT)
+              echo "Verdict: ${verdict} — no blocking concerns."
+              ;;
+            REQUEST_CHANGES)
+              echo "::error::Claude verdict: REQUEST_CHANGES — PR must address blocking concerns before merge."
+              exit 1
+              ;;
+            "")
+              echo "::error::Claude verdict empty — fail closed."
+              exit 1
+              ;;
+            *)
+              echo "::error::Claude verdict '${verdict}' not recognised — fail closed."
+              exit 1
+              ;;
+          esac
