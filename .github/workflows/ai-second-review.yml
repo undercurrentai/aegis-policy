@@ -336,9 +336,16 @@ jobs:
         id: diff
         run: |
           set -euo pipefail
+          # Disable shell glob expansion per QG-§44 Phase 2 cycle 3 Agent-B
+          # Finding G (MEDIUM/C3) + cycle 4 symmetry-fix: same fix already
+          # applied to gpt-review; both reviewers MUST see the same diff
+          # surface per §44 invariant. See gpt-review compute-diff step for
+          # full rationale.
+          set -f
           base="${{ github.event.pull_request.base.ref }}"
           # shellcheck disable=SC2086
           git diff "origin/${base}...HEAD" -- ${GATED_PATHS} > pr_diff.patch
+          set +f
           if [ ! -s pr_diff.patch ]; then
             echo "diff_empty=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -435,7 +442,12 @@ jobs:
             echo "::error::Codex review file missing or empty — fail closed."
             exit 1
           fi
-          verdict_count=$(grep -c -iE '^## *Verdict\b' codex_review.md || true)
+          # grep -a text-mode flag + GNU-sed /I dependency per QG-§44 Phase 2
+          # cycle 3 Agent-B Findings B + C + cycle 4 symmetry-fix: same fixes
+          # already applied to gpt-review; both reviewers MUST use the same
+          # verdict-parse semantics. See gpt-review enforce-verdict step for
+          # full rationale.
+          verdict_count=$(grep -ac -iE '^## *Verdict\b' codex_review.md || true)
           if [ "${verdict_count}" -eq 0 ]; then
             echo "::error::Codex review has no '## Verdict' section — fail closed."
             exit 1
