@@ -452,11 +452,36 @@ def _fallback_markdown(reason: str) -> str:
     )
 
 
+def _write_fallback(output_path: Path, reason: str) -> None:
+    """Write a fail-closed REQUEST_CHANGES fallback file with OSError logging.
+
+    Per QG-§44 Phase 2 cycle 3 Agent-A Finding 4 (MEDIUM/C3): every
+    fallback-write site in _main_impl previously called args.output.write_text
+    directly, which can itself raise OSError (disk full, EROFS, permission
+    denied). The OSError would propagate up to main()'s top-level safety net,
+    which ALSO calls args.output.write_text — silently double-failing without
+    explicit logging at the inner site. This helper makes the failure path
+    observable while preserving the outer safety-net semantics: if the inner
+    write fails, we log to stderr but DON'T swallow the OSError — re-raise
+    so main()'s except-OSError net catches it deterministically.
+    """
+    try:
+        output_path.write_text(_fallback_markdown(reason), encoding="utf-8")
+    except OSError as write_exc:
+        sys.stderr.write(
+            f"gpt_review: _write_fallback FAILED for reason={reason!r}: "
+            f"{_safe_exc(write_exc)} — outer safety net will retry once\n"
+        )
+        raise
+
+
 def _main_impl(args: argparse.Namespace) -> int:
     """Body of main(); separated so the top-level safety net in main() can
     catch any unexpected exception and STILL write a fail-closed fallback.
     Per accepted-findings row 11 (2b7f9c4e5d83): broaden APIError-only catches
-    to (OpenAIError, httpx.HTTPError, OSError) + add top-level safety net."""
+    to (OpenAIError, httpx.HTTPError, OSError) + add top-level safety net.
+    Per QG-§44 Phase 2 cycle 3 Finding 4 (MEDIUM/C3): fallback writes now
+    routed through _write_fallback() for observability."""
     model = os.environ.get("AEGIS_REVIEW_MODEL", "gpt-5.4-pro")
     effort = os.environ.get("AEGIS_REVIEW_EFFORT", "high")
     # Use _int_env to never raise on malformed env vars (row 22: 9b4c7a2e1d68).
@@ -464,9 +489,9 @@ def _main_impl(args: argparse.Namespace) -> int:
     poll_interval = _int_env("AEGIS_REVIEW_POLL_INTERVAL_SECONDS", 5)
 
     if not os.environ.get("OPENAI_API_KEY"):
-        args.output.write_text(
-            _fallback_markdown("OPENAI_API_KEY is not set in the workflow environment"),
-            encoding="utf-8",
+        _write_fallback(
+            args.output,
+            "OPENAI_API_KEY is not set in the workflow environment",
         )
         sys.stderr.write("gpt_review: OPENAI_API_KEY not set\n")
         return 2
@@ -474,9 +499,7 @@ def _main_impl(args: argparse.Namespace) -> int:
     try:
         diff_text = _read_diff(args.diff)
     except SystemExit as exc:
-        args.output.write_text(
-            _fallback_markdown(f"failed to read diff: {_safe_exc(exc)}"), encoding="utf-8"
-        )
+        _write_fallback(args.output, f"failed to read diff: {_safe_exc(exc)}")
         raise
 
     client = OpenAI()
@@ -510,17 +533,13 @@ def _main_impl(args: argparse.Namespace) -> int:
             ],
         )
     except (OpenAIError, httpx.HTTPError, OSError) as exc:
-        args.output.write_text(
-            _fallback_markdown(f"responses.create failed: {_safe_exc(exc)}"), encoding="utf-8"
-        )
+        _write_fallback(args.output, f"responses.create failed: {_safe_exc(exc)}")
         sys.stderr.write(f"gpt_review: create failed: {_safe_exc(exc)}\n")
         return 3
 
     response_id = getattr(initial, "id", None)
     if not response_id:
-        args.output.write_text(
-            _fallback_markdown("responses.create returned no id"), encoding="utf-8"
-        )
+        _write_fallback(args.output, "responses.create returned no id")
         return 4
 
     sys.stderr.write(f"gpt_review: response id={response_id}\n")
@@ -533,25 +552,21 @@ def _main_impl(args: argparse.Namespace) -> int:
             poll_interval_seconds=poll_interval,
         )
     except SystemExit as exc:
-        args.output.write_text(
-            _fallback_markdown(f"polling failed: {_safe_exc(exc)}"), encoding="utf-8"
-        )
+        _write_fallback(args.output, f"polling failed: {_safe_exc(exc)}")
         raise
 
     status = getattr(final, "status", None)
     if status != "completed":
-        args.output.write_text(
-            _fallback_markdown(f"response status was {status!r}, not completed"),
-            encoding="utf-8",
+        _write_fallback(
+            args.output,
+            f"response status was {status!r}, not completed",
         )
         sys.stderr.write(f"gpt_review: non-completed status: {status}\n")
         return 5
 
     markdown = _extract_text(final).strip()
     if not markdown:
-        args.output.write_text(
-            _fallback_markdown("response produced no text output"), encoding="utf-8"
-        )
+        _write_fallback(args.output, "response produced no text output")
         sys.stderr.write("gpt_review: empty output\n")
         return 6
 

@@ -74,12 +74,18 @@ permissions:
 
 concurrency:
   # Cancel superseded runs if the PR is updated mid-review — no point
-  # reviewing a stale diff. Group includes PR head SHA per QG-§44 Phase 2
-  # cycle 2 finding 4d70e93a8b5c (MEDIUM/C3): SHA-independent marker created
-  # a stale-verdict-on-wrong-SHA risk during fast-iteration PR updates where
-  # cancellation-in-flight could leave a verdict-comment pointing at an
-  # older SHA. Embedding the head SHA makes the group SHA-specific.
-  group: ai-second-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  # reviewing a stale diff. Per QG-§44 Phase 2 cycle 3 Agent-B Finding F
+  # (escalated LOW→MEDIUM per broken-invariant criterion): cycle 2's SHA-suffix
+  # variant created NEW groups per push, defeating cancel-in-progress entirely
+  # and producing a race where the OLDER stranded workflow finishes LAST and
+  # OVERWRITES the NEWER verdict via updateComment marker-match. Reverting to
+  # PR-number-only group restores cancel-in-progress semantics (NEWER always
+  # wins). The cycle 2 finding 4d70e93a8b5c stale-verdict-on-wrong-SHA risk it
+  # was trying to mitigate is now handled defensively in the post-comment +
+  # verdict-enforce steps: each compares the CURRENT pr head_sha against the
+  # SHA captured at compute-diff time and bails out if they diverge (a stale-
+  # cancellation race that escaped concurrency cancellation).
+  group: ai-second-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
@@ -89,9 +95,14 @@ env:
   # explicitly but the `on.pull_request.paths` filter uses scripts/check_*.py
   # glob — adding a new gated script (e.g., check_vendored_source_sha.py per
   # cosmic-flute §26.17 FU-3) would trigger the workflow but fail to include
-  # the new file in the diff. Use a shell glob that expands at runtime to
-  # match the path-trigger semantics. The trailing `*.py` keeps the same glob
-  # surface as the `on.pull_request.paths` entry.
+  # the new file in the diff. The glob is quoted as a single Git pathspec
+  # (NOT shell-expanded) per QG-§44 Phase 2 cycle 3 Agent-B Finding G
+  # (MEDIUM/C3): shell glob expansion runs against the post-checkout working
+  # tree, so a PR that DELETES scripts/check_fingerprints.py would have no
+  # match (the file is gone post-checkout) and the deletion would be missing
+  # from pr_diff.patch. Git pathspec engine matches deletions because it
+  # walks the diff index, not the working tree. The quotes around 'scripts/check_*.py'
+  # in the git diff invocation below prevent shell expansion.
   GATED_PATHS: >-
     keys/
     schema/
@@ -132,9 +143,18 @@ jobs:
         id: diff
         run: |
           set -euo pipefail
+          # Disable shell glob expansion per QG-§44 Phase 2 cycle 3 Agent-B
+          # Finding G (MEDIUM/C3): otherwise `scripts/check_*.py` glob-expands
+          # against the WORKING TREE (post-checkout) — a PR that DELETES
+          # scripts/check_fingerprints.py would have no match for that file
+          # so the deletion would be missing from pr_diff.patch. Git pathspec
+          # engine matches deletions because it walks the diff index, not the
+          # working tree. `set -f` lets the literal glob string reach Git.
+          set -f
           base="${{ github.event.pull_request.base.ref }}"
           # shellcheck disable=SC2086  # word-splitting GATED_PATHS is intentional
           git diff "origin/${base}...HEAD" -- ${GATED_PATHS} > pr_diff.patch
+          set +f
           if [ ! -s pr_diff.patch ]; then
             echo "diff_empty=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -255,7 +275,17 @@ jobs:
             echo "::error::gpt-5.4-pro review file missing or empty — fail closed."
             exit 1
           fi
-          verdict_count=$(grep -c -iE '^## *Verdict\b' gpt_review.md || true)
+          # grep -a forces text-mode per QG-§44 Phase 2 cycle 3 Agent-B Finding B
+          # (MEDIUM/C3): on a binary-tainted review file (model glitch emitting
+          # stray null bytes), `grep -c` without -a prints "Binary file matches"
+          # to stderr + count=1 regardless of actual heading count, defeating
+          # the verdict-count > 1 fail-closed guard. -a treats input as text.
+          # NOTE: sed -n '/PATTERN/I,/^##/{...}' uses GNU sed's /I case-insensitive
+          # address flag, which is NOT portable to BSD sed (macOS local-dev
+          # testing). Blacksmith runners are Linux/GNU so production-safe; if
+          # you're testing locally on macOS, install gnu-sed via homebrew + use
+          # gsed. Per QG-§44 Phase 2 cycle 3 Agent-B Finding C (MEDIUM/C2).
+          verdict_count=$(grep -ac -iE '^## *Verdict\b' gpt_review.md || true)
           if [ "${verdict_count}" -eq 0 ]; then
             echo "::error::gpt-5.4-pro review has no '## Verdict' section — fail closed."
             exit 1
@@ -458,8 +488,20 @@ jobs:
     # workflow would fail benignly), but an explicit guard makes the
     # security boundary visible to reviewers + survives any future policy
     # changes that might broaden fork-PR secret access.
-    if: github.event.pull_request.head.repo.fork == false ||
-        github.event.pull_request.head.repo.full_name == github.repository
+    #
+    # Null-safe variant per QG-§44 Phase 2 cycle 3 Agent-B Finding E
+    # (MEDIUM/C3): when a fork repo is deleted between PR open + re-trigger,
+    # github.event.pull_request.head.repo is null in the payload. The prior
+    # `head.repo.fork == false` clause evaluated to `null == false` → false,
+    # falling through to `head.repo.full_name == github.repository` which is
+    # also `null == ...` → false, silently skipping the job for legitimate
+    # same-repo PRs. The added third clause `|| head.repo == null` accepts
+    # the null-payload case (the head repo no longer exists; treat as no
+    # fork risk since there's no fork-repo-controlled code to attack with).
+    if: >-
+      github.event.pull_request.head.repo.fork == false ||
+      github.event.pull_request.head.repo.full_name == github.repository ||
+      github.event.pull_request.head.repo == null
     steps:
       - name: Checkout PR head
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
