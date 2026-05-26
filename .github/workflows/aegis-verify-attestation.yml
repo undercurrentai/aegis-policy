@@ -197,14 +197,26 @@ jobs:
       # the runtime fingerprint cross-check in scripts/verify_action.py.
       - name: Resolve callee workflow ref (cross-repo workflow_call)
         id: resolve_callee
+        # C3 (cosmic-flute §45.12.5.3): refactored to use env:-passed
+        # job.workflow_* values instead of `${{ toJSON(...) }}` template
+        # expressions inside the script body. Reason: enables byte-for-byte
+        # parity between this inline body and .github/scripts/resolve_callee.mjs
+        # (the standalone ESM module that the Node test harness imports).
+        # Template expressions inside script: bodies cannot be byte-identical
+        # to a plain .mjs file. Env-var injection preserves semantics +
+        # makes the body pure JS that runs identically in both contexts.
+        env:
+          # job.workflow_* per Contexts reference §job (cloud-only; returns
+          # callee values for cross-repo workflow_call). GHES fallback in body.
+          JOB_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
             // PRIMARY path: GitHub.com cloud — job.workflow_* returns callee values.
-            // toJSON safely embeds GHA context values as JS string literals
-            // (handles empty / null / quoted strings cleanly).
-            const jobRepo = ${{ toJSON(job.workflow_repository) }};
-            const jobSha = ${{ toJSON(job.workflow_sha) }};
+            // Read from env vars injected by step's env: block.
+            const jobRepo = process.env.JOB_WORKFLOW_REPOSITORY || '';
+            const jobSha = process.env.JOB_WORKFLOW_SHA || '';
 
             let resolvedRepo = jobRepo;
             let resolvedRef = jobSha;
@@ -245,10 +257,21 @@ jobs:
               // defense-in-depth — referenced_workflows is server-computed so
               // forgery is theoretical, but cheap to harden).
               //
+              // U1+U2 (cosmic-flute §45.12.5.3 + §37.18.16): filename literal
+              // extracted to REUSABLE_WORKFLOW_FILENAME const so a future
+              // workflow rename can update it in one place + the regression
+              // test in tests/test_verify_attestation_node.mjs asserts parity
+              // between the const + the actual workflow filename. Closes the
+              // rename hazard where SELF_REGEX would silently throw on every
+              // invocation if someone renamed the file but missed this regex.
+              //
               // Path format (per GitHub REST API):
               //   <owner>/<repo>/.github/workflows/<file>.yml@<ref>
               // The optional `@<ref>` suffix appears for cross-repo references.
-              const SELF_REGEX = /^([^/]+)\/([^/]+)\/\.github\/workflows\/aegis-verify-attestation\.yml(?:@.*)?$/;
+              const REUSABLE_WORKFLOW_FILENAME = 'aegis-verify-attestation.yml';
+              const SELF_REGEX = new RegExp(
+                `^([^/]+)/([^/]+)/\\.github/workflows/${REUSABLE_WORKFLOW_FILENAME.replace(/\./g, '\\.')}(?:@.*)?$`,
+              );
               // Collect ALL matches (not just first) to detect multi-match
               // ambiguity per /quality-gate Phase 3 /ultrathink U6 (MEDIUM/C2):
               // GitHub API does not guarantee referenced_workflows[] ordering.
@@ -266,7 +289,7 @@ jobs:
               }
               if (matches.length === 0) {
                 throw new Error(
-                  `No referenced_workflows entry matched aegis-verify-attestation.yml (anchored regex). ` +
+                  `No referenced_workflows entry matched ${REUSABLE_WORKFLOW_FILENAME} (anchored regex). ` +
                   `Searched ${referenced.length} entries. Paths: ` +
                   JSON.stringify(referenced.map((w) => w.path)),
                 );
@@ -279,7 +302,7 @@ jobs:
                 const uniqueKeys = [...new Set(matches.map(dedupeKey))];
                 if (uniqueKeys.length > 1) {
                   throw new Error(
-                    `Multiple aegis-verify-attestation.yml referenced_workflows entries found with DIFFERENT (owner, repo, sha) tuples — cannot deterministically resolve callee. ` +
+                    `Multiple ${REUSABLE_WORKFLOW_FILENAME} referenced_workflows entries found with DIFFERENT (owner, repo, sha) tuples — cannot deterministically resolve callee. ` +
                     `GitHub API does not guarantee referenced_workflows[] ordering, so picking the first would be non-deterministic. ` +
                     `Distinct callee tuples: ${JSON.stringify(uniqueKeys)}. ` +
                     `Resolution: pin caller-side, or file aegis-policy issue with the caller's workflow context.`,
@@ -294,6 +317,19 @@ jobs:
               resolvedRepo = `${matchedOwner}/${matchedRepo}`;
               // Prefer immutable SHA over mutable ref (gh-aw #24974 — resists
               // branch drift during long-running jobs).
+              //
+              // U9/F1.3 (cosmic-flute §45.12.5.3 + §37.18.16): when .sha is
+              // empty AND .ref is present, the silent fallback proceeds with
+              // a mutable ref. Emit a core.warning so operators can request
+              // the caller pin by commit SHA. Closes the "silent .ref fallback"
+              // observability gap.
+              if (!matchingEntry.sha) {
+                core.warning(
+                  `referenced_workflows entry has no immutable .sha; falling back to mutable .ref="${matchingEntry.ref}". ` +
+                  `Caller may have pinned this reusable workflow by branch/tag rather than commit SHA — ` +
+                  `request the caller pin by commit SHA per cosmic-flute §35.5 best practice.`,
+                );
+              }
               resolvedRef = matchingEntry.sha || matchingEntry.ref;
               resolutionPath = 'referenced_workflows-API';
             }
