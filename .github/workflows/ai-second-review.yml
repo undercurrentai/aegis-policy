@@ -150,23 +150,52 @@ jobs:
     # §44 Phase 1 PILOT — advisory only. Phase 2+ removes this when
     # aggregator-approve lands and consumes the verdict for binding approval.
     continue-on-error: true
+    # G3 fork-guard symmetry per cosmic-flute §45.12.5.1 (partial; full closure
+    # in C5 stale-guard residual + G3-symmetric). Implicit GitHub Actions
+    # behavior already denies fork PRs access to OPENAI_API_KEY, but explicit
+    # guard makes the security boundary visible to reviewers + survives any
+    # future policy changes. Null-safe variant per QG-§44 Phase 2 cycle 3
+    # Agent-B Finding E (MEDIUM/C3) — accepts the case where head.repo is null
+    # (fork deleted between PR open + re-trigger).
+    if: >-
+      github.event.pull_request.head.repo.fork == false ||
+      github.event.pull_request.head.repo.full_name == github.repository ||
+      github.event.pull_request.head.repo == null
     steps:
-      - name: Checkout PR head
+      # === DUAL-CHECKOUT BASE/HEAD per cosmic-flute §45.12.5.1 ===
+      # BASE workspace (trusted): scripts + prompts execute from here.
+      # HEAD workspace (untrusted): diff content sourced here as DATA only —
+      # PR-head code is NEVER executed. Closes:
+      #   - Codex C1 (mutable base.ref → immutable base.sha; reproducible diff)
+      #   - GPT G1 (script-injection vector eliminated — same-repo PR can no
+      #     longer mutate scripts/prompts since they execute from BASE workspace)
+      # Per GitHub Security Lab (2021+2025) + cosmic-flute §44.20.4 research:
+      # canonical "trusted assets + untrusted data" pattern under
+      # `on: pull_request`. DO NOT migrate to `pull_request_target` — strictly
+      # more dangerous, not safer.
+      - name: Checkout BASE ref (trusted scripts/prompts source)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}    # IMMUTABLE (closes Codex C1)
+          fetch-depth: 0
+          path: aegis-policy-base
+
+      - name: Checkout PR HEAD (untrusted diff DATA only)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          path: aegis-policy-pr
+          persist-credentials: false                          # defense-in-depth: PR workspace never pushes
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
-      - name: Fetch base ref
-        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
-
-      - name: Compute diff against base
+      - name: Compute diff (PR head workspace; diff DATA only)
         id: diff
+        working-directory: aegis-policy-pr
         run: |
           set -euo pipefail
           # Disable shell glob expansion per QG-§44 Phase 2 cycle 3 Agent-B
@@ -177,23 +206,26 @@ jobs:
           # engine matches deletions because it walks the diff index, not the
           # working tree. `set -f` lets the literal glob string reach Git.
           set -f
-          base="${{ github.event.pull_request.base.ref }}"
+          # Fetch base.sha into the PR workspace's git so we can diff against it.
+          git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
           # shellcheck disable=SC2086  # word-splitting GATED_PATHS is intentional
-          git diff "origin/${base}...HEAD" -- ${GATED_PATHS} > pr_diff.patch
+          # Diff written to ../pr_diff.patch (runner workspace root) — reachable
+          # from BASE workspace as ../pr_diff.patch for the script-execution step.
+          git diff "${{ github.event.pull_request.base.sha }}...HEAD" -- ${GATED_PATHS} > ../pr_diff.patch
           set +f
-          if [ ! -s pr_diff.patch ]; then
+          if [ ! -s ../pr_diff.patch ]; then
             echo "diff_empty=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          diff_bytes=$(wc -c < pr_diff.patch)
+          diff_bytes=$(wc -c < ../pr_diff.patch)
           echo "diff_bytes=${diff_bytes}" >> "$GITHUB_OUTPUT"
           echo "PR diff: ${diff_bytes} bytes"
           # Cap diff at ~200 KB to keep well under the model's context
           # budget even after system prompt + reasoning tokens.
           if [ "${diff_bytes}" -gt 204800 ]; then
-            head -c 204800 pr_diff.patch > pr_diff.truncated
-            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> pr_diff.truncated
-            mv pr_diff.truncated pr_diff.patch
+            head -c 204800 ../pr_diff.patch > ../pr_diff.truncated
+            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> ../pr_diff.truncated
+            mv ../pr_diff.truncated ../pr_diff.patch
             echo "diff_truncated=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -203,6 +235,7 @@ jobs:
 
       - name: Run gpt-5.4-pro review
         if: steps.diff.outputs.diff_empty != 'true'
+        working-directory: aegis-policy-base    # script SOURCED FROM BASE (trusted)
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -215,9 +248,12 @@ jobs:
           AEGIS_REVIEW_POLL_TIMEOUT_SECONDS: "1500"  # 25 minutes
           AEGIS_REVIEW_POLL_INTERVAL_SECONDS: "5"
         run: |
+          # ../pr_diff.patch + ../gpt_review.md write to runner workspace root
+          # so subsequent steps (Load review body, Post comment, Write summary,
+          # Enforce verdict) can read them unchanged.
           python .github/scripts/gpt_review.py \
-            --diff pr_diff.patch \
-            --output gpt_review.md
+            --diff ../pr_diff.patch \
+            --output ../gpt_review.md
 
       - name: Load review body into env
         # always() so a failed review step still posts the fallback
@@ -348,18 +384,34 @@ jobs:
     # a pure-model review. 30 minutes gives us headroom on tough diffs.
     timeout-minutes: 30
     continue-on-error: true  # §44 Phase 1 advisory
+    # G3 fork-guard symmetry per cosmic-flute §45.12.5.1 (partial; full closure
+    # in C5). Same pattern as gpt-review — see that job's `if:` block for full
+    # rationale. Null-safe variant per QG-§44 Phase 2 cycle 3 Agent-B Finding E.
+    if: >-
+      github.event.pull_request.head.repo.fork == false ||
+      github.event.pull_request.head.repo.full_name == github.repository ||
+      github.event.pull_request.head.repo == null
     steps:
-      - name: Checkout PR head
+      # === DUAL-CHECKOUT BASE/HEAD per cosmic-flute §45.12.5.1 ===
+      # Same pattern as gpt-review — see that job for full rationale.
+      - name: Checkout BASE ref (trusted scripts/prompts source)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}    # IMMUTABLE (closes Codex C1)
+          fetch-depth: 0
+          path: aegis-policy-base
+
+      - name: Checkout PR HEAD (untrusted diff DATA only)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          path: aegis-policy-pr
+          persist-credentials: false                          # defense-in-depth
 
-      - name: Fetch base ref
-        run: git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
-
-      - name: Compute diff against base
+      - name: Compute diff (PR head workspace; diff DATA only)
         id: diff
+        working-directory: aegis-policy-pr
         run: |
           set -euo pipefail
           # Disable shell glob expansion per QG-§44 Phase 2 cycle 3 Agent-B
@@ -368,33 +420,37 @@ jobs:
           # surface per §44 invariant. See gpt-review compute-diff step for
           # full rationale.
           set -f
-          base="${{ github.event.pull_request.base.ref }}"
+          git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
           # shellcheck disable=SC2086
-          git diff "origin/${base}...HEAD" -- ${GATED_PATHS} > pr_diff.patch
+          git diff "${{ github.event.pull_request.base.sha }}...HEAD" -- ${GATED_PATHS} > ../pr_diff.patch
           set +f
-          if [ ! -s pr_diff.patch ]; then
+          if [ ! -s ../pr_diff.patch ]; then
             echo "diff_empty=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          diff_bytes=$(wc -c < pr_diff.patch)
+          diff_bytes=$(wc -c < ../pr_diff.patch)
           echo "PR diff: ${diff_bytes} bytes"
           if [ "${diff_bytes}" -gt 204800 ]; then
-            head -c 204800 pr_diff.patch > pr_diff.truncated
-            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> pr_diff.truncated
-            mv pr_diff.truncated pr_diff.patch
+            head -c 204800 ../pr_diff.patch > ../pr_diff.truncated
+            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> ../pr_diff.truncated
+            mv ../pr_diff.truncated ../pr_diff.patch
           fi
 
       - name: Run Codex review
         id: codex
         if: steps.diff.outputs.diff_empty != 'true'
+        working-directory: aegis-policy-base    # prompt + output execute from BASE (trusted)
         # Official OpenAI action. Installs the Codex CLI, starts a
         # Responses-API proxy from the OPENAI_API_KEY input, and runs
         # `codex exec` under the chosen sandbox strategy.
+        # prompt-file: relative to working-directory (BASE workspace).
+        # output-file: ../codex_review.md writes to runner workspace root so
+        # subsequent steps (Load review body, Post comment, etc.) read unchanged.
         uses: openai/codex-action@0b91f4a2703c23df3102c3f0967d3c6db34eedef # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/second-review.md
-          output-file: codex_review.md
+          output-file: ../codex_review.md
           # gpt-5.3-codex is OpenAI's "primary choice for coding and
           # development tasks" — specialized for agentic coding, code
           # editing, and tool-heavy workflows.
@@ -541,14 +597,54 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository ||
       github.event.pull_request.head.repo == null
     steps:
-      - name: Checkout PR head
+      # === DUAL-CHECKOUT BASE/HEAD per cosmic-flute §45.12.5.1 ===
+      # Symmetric with gpt-review + codex-review. Compute-diff added in C1 so
+      # all 3 reviewers see the same gated diff surface + C2 has pr_diff.patch
+      # ready to consume for artifact-based verdict pipeline. See gpt-review
+      # job for full pattern rationale.
+      - name: Checkout BASE ref (trusted scripts/prompts source)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}    # IMMUTABLE (closes Codex C1)
+          fetch-depth: 0
+          path: aegis-policy-base
+
+      - name: Checkout PR HEAD (untrusted diff DATA only)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
+          path: aegis-policy-pr
+          persist-credentials: false                          # defense-in-depth
+
+      - name: Compute diff (PR head workspace; diff DATA only)
+        id: diff
+        working-directory: aegis-policy-pr
+        run: |
+          set -euo pipefail
+          # Symmetric with gpt-review + codex-review compute-diff. See gpt-review
+          # for full rationale on set -f + GATED_PATHS + 200 KB truncation cap.
+          set -f
+          git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+          # shellcheck disable=SC2086
+          git diff "${{ github.event.pull_request.base.sha }}...HEAD" -- ${GATED_PATHS} > ../pr_diff.patch
+          set +f
+          if [ ! -s ../pr_diff.patch ]; then
+            echo "diff_empty=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          diff_bytes=$(wc -c < ../pr_diff.patch)
+          echo "PR diff: ${diff_bytes} bytes"
+          if [ "${diff_bytes}" -gt 204800 ]; then
+            head -c 204800 ../pr_diff.patch > ../pr_diff.truncated
+            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> ../pr_diff.truncated
+            mv ../pr_diff.truncated ../pr_diff.patch
+          fi
 
       - name: Run Claude review
         id: claude
+        if: steps.diff.outputs.diff_empty != 'true'
+        working-directory: aegis-policy-base    # allowedTools resolve relative to BASE (trusted)
         uses: anthropics/claude-code-action@c7c8889b30499b4e46f4c32b892e43cd364bc2fe # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -581,10 +677,12 @@ jobs:
             - ADR-001 trust model + ADR-002 key ceremony + ADR-003 algorithm migration alignment
             - scope creep: changes outside gated paths bundled with trust-spine changes
 
-            Post your review as a SINGLE PR comment using:
-            gh pr comment ${{ github.event.pull_request.number }} --body "YOUR REVIEW"
+            Write your review to the file `claude_review.md` in the current
+            working directory (aegis-policy-base). DO NOT post a PR comment
+            yourself — the workflow will post the file contents via a trusted
+            github-script step with an integrity nonce (run-id + head-sha).
 
-            Your review comment MUST start with <!-- ai-second-review:claude -->
+            Your review file MUST start with <!-- ai-second-review:claude -->
             and include these sections in order:
             ## Verdict
             One of: APPROVE, REQUEST_CHANGES, COMMENT.
@@ -593,52 +691,90 @@ jobs:
             ## Non-blocking observations
             ## Specific line callouts
             ## What I did NOT review
+          # C2 (cosmic-flute §45.12.5.2): NEW-H1 + NEW-H2 closure.
+          # NEW-H1 (HIGH/C3): removed Bash(gh pr comment:*) — comment posting
+          # routes through actions/github-script with Octokit-serialized body
+          # (immune to shell-injection in Claude output).
+          # NEW-H2 (HIGH/C3): verdict parsed from local claude_review.md
+          # artifact (not PR-comment scrape) — eliminates spoofability + stale-
+          # run-prone classes entirely.
+          # Added Write(claude_review.md) for artifact-based pipeline.
+          # C4 (Codex C2) will further narrow Bash(...) → Read(...) scope-gates.
           claude_args: |
-            --model claude-opus-4-6 --allowedTools "Read,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(cat pr_diff.patch),Bash(shasum -a 256 keys/*),Bash(python3 scripts/check_error_class_parity.py),Bash(python3 scripts/check_fingerprints.py)"
+            --model claude-opus-4-6 --allowedTools "Read,Write(claude_review.md),Bash(cat ../pr_diff.patch),Bash(shasum -a 256 keys/*),Bash(python3 scripts/check_error_class_parity.py),Bash(python3 scripts/check_fingerprints.py)"
 
-      - name: Scrape verdict from PR comment
-        if: always()
-        id: verdict
+      - name: Post review comment (claude) with run-id + head-sha nonce
+        # NEW-H1 (HIGH/C3 / cosmic-flute §45.12.5.2): body passed via
+        # process.env to Octokit (JSON-serialized, NEVER shell-evaluated) —
+        # eliminates the entire shell-injection class for any unexpected
+        # character in Claude's output. NEW-H2 (HIGH/C3): nonce stamp ties
+        # comment to THIS run + THIS head SHA for observability cross-check.
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         with:
           script: |
+            const fs = require('fs');
+            const reviewPath = 'aegis-policy-base/claude_review.md';
+            const body = fs.existsSync(reviewPath)
+              ? fs.readFileSync(reviewPath, 'utf8')
+              : '_Claude review artifact missing — see workflow logs._';
             const marker = '<!-- ai-second-review:claude -->';
+            const nonce = `<!-- run-id:${process.env.GITHUB_RUN_ID} head-sha:${process.env.PR_HEAD_SHA} -->`;
+            const header = '## 🤖 Claude Opus 4.6 — Second-Reviewer Gate (§44 Phase 1 Pilot — ADVISORY)';
+            const footer = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1). Accountable human reviewer: @ThermoclineLeviathan.*';
+            const full = `${marker}\n${nonce}\n\n${header}\n\n${body}\n\n${footer}`;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number, per_page: 100,
             });
-            const review = comments
-              .filter((c) => c.body && c.body.includes(marker))
-              .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))[0];
-
-            if (!review) {
-              core.setFailed('Claude review comment not found — fail closed.');
-              return;
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body: full });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body: full });
             }
 
-            // Hardening per QG-§44 Phase 2 cycle 2:
-            //   - finding 4d8a6e2f1b97-residual (HIGH/C3 RESIDUAL): case-
-            //     insensitive `## Verdict` match (the `i` regex flag).
-            //   - finding 3d1f6e9c8a47 (workflow part): verdict-count guard
-            //     — exactly ONE `## Verdict` heading required.
+      - name: Extract verdict from local artifact (primary — NEW-H2 fix)
+        # NEW-H2 (HIGH/C3 / cosmic-flute §45.12.5.2): verdict parsed from LOCAL
+        # ARTIFACT, NEVER PR-comment scrape. Eliminates spoofability + stale-
+        # run-prone classes entirely. Legacy comment-scrape pipeline DELETED
+        # (was at L599-654 pre-C2; see git history for the deleted block).
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        id: verdict
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const reviewPath = 'aegis-policy-base/claude_review.md';
+            if (!fs.existsSync(reviewPath)) {
+              core.setFailed(`Claude review artifact missing at ${reviewPath} — fail closed.`);
+              return;
+            }
+            const reviewBody = fs.readFileSync(reviewPath, 'utf8');
+
+            // Hardening per QG-§44 Phase 2 cycle 2 (preserved post-C2):
+            //   - case-insensitive `## Verdict` match (the `i` regex flag).
+            //   - verdict-count guard — exactly ONE `## Verdict` heading required.
             const verdictHeadingRe = /^## *Verdict\b/im;
             const verdictHeadingReGlobal = /^## *Verdict\b/gim;
-            const headingMatches = review.body.match(verdictHeadingReGlobal) || [];
+            const headingMatches = reviewBody.match(verdictHeadingReGlobal) || [];
             if (headingMatches.length === 0) {
-              core.setFailed('Claude review has no "## Verdict" section — fail closed.');
+              core.setFailed('Claude review artifact has no "## Verdict" section — fail closed.');
               return;
             }
             if (headingMatches.length > 1) {
               core.setFailed(
-                `Claude review has ${headingMatches.length} "## Verdict" sections ` +
+                `Claude review artifact has ${headingMatches.length} "## Verdict" sections ` +
                 '(expected exactly 1; possible prompt-injection) — fail closed.'
               );
               return;
             }
 
             // Extract verdict: first non-empty line after "## Verdict"
-            const lines = review.body.split('\n');
+            const lines = reviewBody.split('\n');
             let inVerdict = false;
             let verdict = '';
             for (const line of lines) {
@@ -650,13 +786,13 @@ jobs:
               }
             }
 
-            core.info(`Claude verdict: ${verdict}`);
+            core.info(`Claude verdict (from artifact): ${verdict}`);
             core.setOutput('verdict', verdict);
 
             // Write review to job summary
-            const header = '## 🤖 Claude Opus 4.6 — Second-Reviewer Gate (§44 Phase 1 Pilot)';
-            const footer = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1 — Pilot). Accountable human reviewer: @ThermoclineLeviathan.*';
-            await core.summary.addRaw(`${header}\n\n${review.body}\n\n${footer}`).write();
+            const summaryHeader = '## 🤖 Claude Opus 4.6 — Second-Reviewer Gate (§44 Phase 1 Pilot)';
+            const summaryFooter = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1 — Pilot). Accountable human reviewer: @ThermoclineLeviathan.*';
+            await core.summary.addRaw(`${summaryHeader}\n\n${reviewBody}\n\n${summaryFooter}`).write();
 
       - name: Enforce verdict
         if: always()
