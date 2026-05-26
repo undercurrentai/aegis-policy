@@ -942,7 +942,7 @@ jobs:
         # G2-residual (cosmic-flute §45.12.5.5): env.STALE_RUN_BAIL != '1'
         # gates this step on the stale-SHA guard step's outcome. Symmetric
         # pattern with gpt-review + codex-review.
-        if: always() && env.STALE_RUN_BAIL != '1'
+        if: always() && steps.diff.outputs.diff_empty != 'true' && env.STALE_RUN_BAIL != '1'
         run: |
           verdict="${{ steps.verdict.outputs.verdict }}"
           # G4 (cosmic-flute §45.12.5.5): truncated-diff fail-closed gate.

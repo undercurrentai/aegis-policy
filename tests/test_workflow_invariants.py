@@ -29,6 +29,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REUSABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "aegis-verify-attestation.yml"
 SELFTEST_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "e3-workflow-selftest.yml"
+AI_SECOND_REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ai-second-review.yml"
 
 
 class TestReusableWorkflowF1F2Regression:
@@ -369,6 +370,30 @@ class TestSelftestWorkflowF4Regression:
             "`continue-on-error: true` so the assert step in the same job can "
             "read failure outputs."
         )
+
+
+class TestAiSecondReviewC5Regression:
+    """Sprint 7/G1 C5 regression guard for empty-diff semantics."""
+
+    def test_enforce_verdict_skips_empty_diff_in_all_reviewer_jobs(self):
+        """All three reviewer jobs must skip Enforce verdict when diff_empty=true.
+
+        If a reviewer job enforces verdict without this guard, an empty
+        diff can fail closed due to missing verdict output even though there
+        was nothing to review.
+        """
+        doc = yaml.safe_load(AI_SECOND_REVIEW_WORKFLOW.read_text())
+        jobs = doc["jobs"]
+
+        for job_name in ("gpt-review", "codex-review", "claude-review"):
+            steps = jobs[job_name]["steps"]
+            enforce = next((s for s in steps if s.get("name") == "Enforce verdict"), None)
+            assert enforce is not None, f"{job_name} missing Enforce verdict step"
+            if_clause = enforce.get("if", "")
+            assert "steps.diff.outputs.diff_empty != 'true'" in if_clause, (
+                f"{job_name} Enforce verdict must skip empty diffs "
+                f"(missing `steps.diff.outputs.diff_empty != 'true'` in if: {if_clause!r})"
+            )
 
 
 class TestSlsaUrlF8Regression:
