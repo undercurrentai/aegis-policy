@@ -6,6 +6,54 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 
 ---
 
+## [1.2.4] — 2026-05-26
+
+**Sprint 7/G1 task #185 — verifier-kit + tri-AI second-reviewer hardening bundle (11 deferred findings closed).** Closes the deferred-finding ledger from §37.18.16 (3 verifier-kit hardenings: F2.2 + U1+U2 + U9/F1.3) + §44.20.3 P1.5 baseline #1 (Codex C1+C2 + GPT G1+G2+G3+G4) + §44.20.10.2 P1.5 baseline #2 (NEW-H1 + NEW-H2 HIGH/C3). 5 prior /quality-gate Phase 2 bug-hunt cycles missed all 11 findings; the §44 tri-AI panel produced value single-pass review misses. Single PR + 5 commits + 6 files; ZERO production runtime impact; ZERO cross-repo aegis-governance consumer impact (consumer pin `cded778` unchanged).
+
+### Security
+
+- **Closes 11 deferred hardening items**: 2 HIGH/C3 (NEW-H1 `gh pr comment` shell-expansion; NEW-H2 Claude verdict-scrape spoofability) + 3 HIGH/C3 deferred verifier-kit semantics (F2.2 + U1+U2 + U9/F1.3 from §37.18.16) + 6 MEDIUM/C2-LOW/C2 (Codex C1+C2 + GPT G1-G4 from §44.20).
+- **Dual-checkout BASE/HEAD pattern** (closes Codex C1 + GPT G1 + partial G3): trusted scripts execute from `base.sha` workspace (`aegis-policy-base/`); untrusted PR head fetched separately at `aegis-policy-pr/` with `persist-credentials: false` for diff DATA only. Eliminates the canonical "pwn request" attack pattern under `on: pull_request` per GitHub Security Lab 2021+2025 research. Diff anchored to **immutable `base.sha`** instead of mutable `base.ref` (closes Codex C1).
+- **Artifact-based Claude verdict pipeline** (closes NEW-H2 HIGH/C3): Claude review parsed from local `claude_review.md` artifact in BASE workspace instead of PR-comment scrape. Eliminates spoofability + stale-run-prone races + entire comment-scrape attack surface. Comment posted via trusted `actions/github-script` `github.rest.issues.{createComment,updateComment}` with body passed via `process.env` (Octokit JSON-serializes; NEVER shell-evaluated). `Bash(gh pr comment:*)` removed from `claude_args.allowedTools` (closes NEW-H1 HIGH/C3 shell-expansion path).
+- **Comment-pipeline integrity nonce**: `<!-- run-id:${GITHUB_RUN_ID} head-sha:${PR_HEAD_SHA} -->` stamped on every reviewer comment for observability cross-check + future replay detection.
+- **Stale-SHA guard** (closes G2-residual MEDIUM/C2): `gpt-review` + `codex-review` + `claude-review` Enforce verdict steps gated on `env.STALE_RUN_BAIL != '1'`; preceding stale-SHA guard step uses `actions/github-script` to re-query PR head SHA and set bail flag on drift from compute-diff-time SHA. Defense-in-depth atop concurrency cancellation.
+- **G3-symmetric fork-guard**: dual-checkout pattern preserves existing claude-review null-safe `head.repo` guard semantics; fork PRs cannot exercise secret-bearing steps (GitHub-platform default + explicit guard layer).
+- **G4 truncation fail-closed gate**: 200 KB diff cap + REQUEST_CHANGES required when truncation occurs. Banner `[!!! diff truncated at 200 KB — fail-closed: REQUEST_CHANGES if you cannot verify the full surface !!!]` prepended to `pr_diff.patch` itself (models reading the diff see the directive directly); `Enforce verdict` step blocks merge if `diff_truncated=true` AND `verdict != REQUEST_CHANGES` — even APPROVE/COMMENT on a truncated diff is unsafe.
+- **Codex sandboxing preamble** (closes Codex C2 MEDIUM/C2): `.github/codex/prompts/second-review.md` documents dual-checkout workspace boundary (`aegis-policy-base/`) + explicitly forbids `gh pr diff`, `gh pr view`, `curl`, `git fetch` to upstream. Claude `allowedTools` narrowed from generic `Read` to per-path scoped (`Read(../pr_diff.patch)`, `Read(keys/**)`, `Read(scripts/**)`, `Read(policy/**)`, `Read(docs/architecture/adr/**)`, `Read(.github/**)`). Removed `Bash(gh pr ...)` + `Bash(cat ...)` shell escape hatches.
+
+### Added
+
+- **`.github/scripts/resolve_callee.mjs`** (NEW; 160 LOC) — standalone ESM module mirroring inline github-script body for the resolve_callee step of `.github/workflows/aegis-verify-attestation.yml`. Parity-locked byte-for-byte against YAML inline body via dedicated CI workflow. Exports `resolve(github, context, core)` async function consumed by the Node test harness. Includes `REUSABLE_WORKFLOW_FILENAME` const + rebuilt `SELF_REGEX` via `new RegExp(...)` closure (closes U1+U2 rename hazard) + `core.warning` block on silent `.ref` fallback when `matchingEntry.sha` empty (closes U9/F1.3 observability gap).
+- **`tests/test_verify_attestation_node.mjs`** (NEW; 246 LOC) — F2.2 Node test harness using `node:test` built-in test runner + mocked Octokit (`github.rest.actions.getWorkflowRun`) + mocked `core` closure. 7 tests covering: (1) primary `job.workflow_*` path; (2) fallback single-match `referenced_workflows-API` path; (3) fallback zero-match throws with disambiguation; (4) same-tuple multi-match resolves deterministically + emits `core.info`; (5) divergent-tuple multi-match throws with candidate enumeration; (6) SELF_REGEX forgery probe (`attacker/repo/.github/workflows/aegis-verify-attestation.yml.evil/inner.yml` does NOT match anchored regex); (7) U9 empty-`.sha` emits `core.warning` + falls back to mutable `.ref`. 7/7 PASS in ~47ms via `node --test`.
+- **`.github/workflows/resolve-callee-parity.yml`** (NEW; 101 LOC) — PR-trigger CI workflow enforcing parity invariant between YAML inline `script:` body + `.mjs` body between `=== BEGIN_INLINE_PARITY ===` / `=== END_INLINE_PARITY ===` markers. Triggers on PRs touching `aegis-verify-attestation.yml`, `resolve_callee.mjs`, `test_verify_attestation_node.mjs`, or itself. Pipeline: Python+PyYAML extracts YAML inline body → `awk` extracts `.mjs` between markers → `diff` byte-for-byte → fail on mismatch → `node --test` 7/7 PASS. Runs on `blacksmith-4vcpu-ubuntu-2404` per portfolio convention. CANNOT live inside `aegis-verify-attestation.yml` itself (which is `workflow_call:`-only).
+
+### Changed
+
+- **aegis-policy version 1.2.3 → 1.2.4** (PATCH per SemVer; hardening + new test infrastructure; reusable workflow inputs/outputs UNCHANGED; cross-repo aegis-governance consumer pin at `cded778` unaffected).
+- **`SELF_REGEX` filename literal extracted** to `REUSABLE_WORKFLOW_FILENAME = 'aegis-verify-attestation.yml'` const in both inline YAML script body + `.mjs` standalone module. Parity-locked via CI workflow.
+- **`.github/workflows/aegis-verify-attestation.yml` resolve_callee step**: refactored `${{ toJSON(...) }}` template expressions to step-level `env:` block (`JOB_WORKFLOW_REPOSITORY` + `JOB_WORKFLOW_SHA`); body reads via `process.env.JOB_WORKFLOW_*` for clean stdlib-only execution path that mirrors the .mjs harness exactly.
+- **Codex CLI prompt `Your environment` section**: documents post-C1 dual-checkout (`aegis-policy-base/` working directory; diff at `../pr_diff.patch`); replaces prior `./pr_diff.patch` path references.
+
+### Wontfix / Deferred
+
+- **G2 stale-SHA guard at Post-comment step**: only Enforce verdict step gated on `STALE_RUN_BAIL`. Stale comment-post is informational (last-writer-wins on PR API; doesn't block merge); stale enforce-exit-1 is the blocking concern. Defense-in-depth focuses on the gating concern; comment-pipeline can race within the cancellation window without blocking impact.
+- **G4 banner instructions in 3 prompt sites** (gpt_review.py + second-review.md + claude inline prompt): banner prepended directly to `pr_diff.patch` is self-documenting (models reading diff see the directive); fail-closed Enforce verdict gate guarantees safety even if models miss the banner. Belt+suspenders prompt instructions deferred to Sprint 7/G1+ follow-up if observability data warrants.
+- **Tri-AI panel composition** (gpt-5.4-pro + gpt-5.3-codex + claude-opus-4-6): inherits AIPEA source pattern. GPT-family over-representation (2/3 OpenAI) is documented limitation per cosmic-flute §44.17.1 model-diversity caveat. Future Sprint 7+ revisit alongside AIPEA upstream.
+- **Strict 3-of-3 unanimous verdict requirement** for §44 Phase 2 aggregator-approve job (NOT shipped in §45): cosmic-flute §44.20.10.3 documents run-to-run non-determinism (P1.5 baselines #1+#2 on same PR produced 11 unique findings across 2 runs with ZERO overlap on most). Future Phase 2 design must address finding-class-agreement (NOT strict unanimous verdict) — separate task #265 area work.
+
+### References
+
+- cosmic-flute §45 (Sprint 7/G1 task #185 plan) + §45.12 (Ultraplan-refined execution detail) + §45.13 (post-merge ship capture; pending).
+- cosmic-flute §44.20 (P1.5 baseline #1 + #2 findings + dual-checkout fix template).
+- cosmic-flute §37.18.16 (3 deferred verifier-kit hardenings from QG-§37.18 post-ship audit).
+- cosmic-flute §43.5 M1 + M3 + M5 institutional learning (run-verify scope probe + time-estimate buffers + recurrence tracking).
+- GitHub Security Lab — Part 1 (2021) + Part 4 (2025): trusted assets + untrusted data under `on: pull_request`.
+- Sysdig 2025-06-17 + Paul Serban 2025-12-23: `pull_request_target` security pitfalls (rejected as wrong mitigation per §44.20.4).
+
+Closes cosmic-flute task #185.
+
+---
+
 ## [1.2.3] — 2026-05-22
 
 **Post-§38 roadmap content refresh** — `docs/roadmap.md` was 4 ship cycles behind canonical state per cosmic-flute §40 /discover audit C-FIND-G (HIGH × C3). Sub-phase 3a row still claimed "🟡 in-progress 2026-05-19 (THIS PR)" + sub-phases 3b/4/5 marked ☐ blocked/planned, despite all 4 having shipped 2026-05-19 plus §38 ADR-013 forensic-audit chain shipping 2026-05-21 (aegis-governance v1.2.7 production deploy). Standalone docs-PR per senior-eng decision: HIGH/C3 + PUBLIC security-spine artifact warrants immediate accuracy over bundle-into-#185-Sprint-7/G1 deferral. ZERO production impact; ZERO source-code touches.

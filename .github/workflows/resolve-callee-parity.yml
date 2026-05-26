@@ -1,0 +1,101 @@
+name: resolve_callee parity + Node tests
+
+# Sprint 7/G1 task #185 F2.2 closure (cosmic-flute §45.12.5.3).
+#
+# Three layered checks:
+#   1. PARITY: extracts the inline `script: |` body from the resolve_callee
+#      step in aegis-verify-attestation.yml + the body between
+#      // === BEGIN_INLINE_PARITY === / === END_INLINE_PARITY === markers
+#      in .github/scripts/resolve_callee.mjs, diffs them byte-for-byte.
+#      Mismatch = build failure. This is the load-bearing invariant: the
+#      .mjs file (which the Node test harness imports) MUST stay in sync
+#      with the inline body (which runs in production CI).
+#   2. NODE TESTS: runs the 7-test harness in tests/test_verify_attestation_node.mjs
+#      which exercises each branch of resolve() with mocked Octokit + core.
+#   3. INVARIANTS: existing pytest workflow-invariants suite + error-class +
+#      fingerprint parity (these run elsewhere; this workflow just adds
+#      the resolve_callee-specific gates).
+#
+# Why a separate workflow (not a job in aegis-verify-attestation.yml):
+# aegis-verify-attestation.yml is `on: workflow_call:`-only (the cross-repo
+# reusable verifier-kit consumer surface). Adding a parity job to it would
+# force every consumer to also run that job. Separate file = separate
+# trigger semantics + clean per-PR surface.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/aegis-verify-attestation.yml'
+      - '.github/workflows/resolve-callee-parity.yml'
+      - '.github/scripts/resolve_callee.mjs'
+      - 'tests/test_verify_attestation_node.mjs'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/aegis-verify-attestation.yml'
+      - '.github/scripts/resolve_callee.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: resolve-callee-parity-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parity:
+    name: resolve_callee inline-vs-mjs parity + Node tests
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Python (for PyYAML inline-body extraction)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node (for `node --test` harness)
+        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v5
+        with:
+          node-version: "22"
+
+      - name: Install PyYAML (PR head workspace)
+        run: pip install --quiet "PyYAML>=6.0"
+
+      - name: Extract inline YAML body + .mjs body
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/parity
+          # Inline YAML body via PyYAML (strips common indent per `script: |`
+          # block scalar dedent rules)
+          python3 - <<'PYEOF' > /tmp/parity/inline-body.js
+          import yaml
+          with open('.github/workflows/aegis-verify-attestation.yml') as f:
+              doc = yaml.safe_load(f)
+          for step in doc['jobs']['verify']['steps']:
+              if step.get('id') == 'resolve_callee':
+                  print(step['with']['script'], end='')
+                  break
+          PYEOF
+
+          # .mjs body between parity markers (exclusive; markers themselves stripped)
+          awk '/=== BEGIN_INLINE_PARITY ===/{flag=1;next}/=== END_INLINE_PARITY ===/{flag=0}flag' \
+            .github/scripts/resolve_callee.mjs > /tmp/parity/mjs-body.js
+
+          echo "Line counts:"
+          wc -l /tmp/parity/inline-body.js /tmp/parity/mjs-body.js
+
+      - name: Diff inline-body vs mjs-body (parity gate)
+        run: |
+          set -euo pipefail
+          if diff /tmp/parity/inline-body.js /tmp/parity/mjs-body.js; then
+            echo "✓ Parity holds — inline YAML body byte-identical to .mjs body between markers."
+          else
+            echo "::error::Parity gate failed. The inline resolve_callee body in aegis-verify-attestation.yml has drifted from .github/scripts/resolve_callee.mjs (between the === BEGIN_INLINE_PARITY === / === END_INLINE_PARITY === markers). Edit BOTH files together so future-Claude can trust the test harness covers the production code path."
+            exit 1
+          fi
+
+      - name: Run Node test harness (F2.2 — 7 tests)
+        run: node --test tests/test_verify_attestation_node.mjs
