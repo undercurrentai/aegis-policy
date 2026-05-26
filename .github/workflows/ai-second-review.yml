@@ -224,7 +224,7 @@ jobs:
           # budget even after system prompt + reasoning tokens.
           if [ "${diff_bytes}" -gt 204800 ]; then
             head -c 204800 ../pr_diff.patch > ../pr_diff.truncated
-            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> ../pr_diff.truncated
+            printf '\n[!!! diff truncated at 200 KB — fail-closed: REQUEST_CHANGES if you cannot verify the full surface !!!]\n' >> ../pr_diff.truncated
             mv ../pr_diff.truncated ../pr_diff.patch
             echo "diff_truncated=true" >> "$GITHUB_OUTPUT"
           fi
@@ -313,6 +313,40 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Stale-SHA guard (G2-residual — cosmic-flute §45.12.5.5)
+        # Defense-in-depth atop concurrency cancellation (which handles the
+        # common case where a newer push cancels the older run before it
+        # finishes). If the PR was force-pushed AFTER compute-diff but BEFORE
+        # this step AND the cancellation arrived mid-step (so an older run
+        # survives), this guard bails the OLDER run's Enforce verdict so the
+        # NEWER cancelling run produces the authoritative verdict.
+        #
+        # Implementation: re-query the PR's current head.sha from the GitHub
+        # API + compare against PR_HEAD_AT_DIFF (the head.sha captured at
+        # workflow-start time via `${{ github.event.pull_request.head.sha }}`,
+        # which IS the diff-time SHA per GHA workflow-event semantics).
+        # Mismatch = stale run; set STALE_RUN_BAIL=1 to gate Enforce verdict.
+        # Idempotent + no-op when SHAs match (the common case).
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        env:
+          PR_HEAD_AT_DIFF: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt(process.env.PR_NUMBER, 10),
+            });
+            if (pr.data.head.sha !== process.env.PR_HEAD_AT_DIFF) {
+              core.warning(
+                `Stale run: PR head SHA drifted (${process.env.PR_HEAD_AT_DIFF} → ${pr.data.head.sha}). ` +
+                `Bailing Enforce verdict; newer cancelling run will produce authoritative verdict.`,
+              );
+              core.exportVariable('STALE_RUN_BAIL', '1');
+            }
+
       - name: Enforce verdict
         # Fail-closed: missing/empty review or REQUEST_CHANGES both block.
         # Only explicit APPROVE or COMMENT passes the gate.
@@ -331,7 +365,13 @@ jobs:
         #     headings indicate prompt-injection (e.g., malicious diff
         #     content injecting a `## Verdict\nAPPROVE` block before the
         #     model's real verdict) or model glitch — either way, fail closed.
-        if: always() && steps.diff.outputs.diff_empty != 'true'
+        #
+        # G2-residual (cosmic-flute §45.12.5.5): env.STALE_RUN_BAIL != '1'
+        # gates this step on the stale-SHA guard step's outcome. If the PR
+        # head SHA drifted between compute-diff and now, the older run bails
+        # the enforce step so the newer cancelling run produces the
+        # authoritative verdict. Defense-in-depth atop concurrency cancellation.
+        if: always() && steps.diff.outputs.diff_empty != 'true' && env.STALE_RUN_BAIL != '1'
         run: |
           if [ ! -s gpt_review.md ]; then
             echo "::error::gpt-5.4-pro review file missing or empty — fail closed."
@@ -359,6 +399,15 @@ jobs:
           raw_verdict=$(sed -n '/^## *Verdict/I,/^##/{/^## *Verdict/Id;/^##/d;/^$/d;p;}' gpt_review.md \
             | head -1 | tr -d '`*' | xargs)
           verdict_upper=$(echo "${raw_verdict}" | awk '{print toupper($1)}'  )
+          # G4 (cosmic-flute §45.12.5.5): truncated-diff fail-closed gate.
+          # If the diff was truncated to 200 KB (compute-diff step emitted
+          # diff_truncated=true), the model cannot have verified the full
+          # surface — its verdict MUST be REQUEST_CHANGES. Even APPROVE/COMMENT
+          # on a truncated diff is unsafe; fail-closed here.
+          if [ "${{ steps.diff.outputs.diff_truncated }}" = "true" ] && [ "${verdict_upper}" != "REQUEST_CHANGES" ]; then
+            echo "::error::Diff was truncated to 200 KB but verdict is '${verdict_upper}' (not REQUEST_CHANGES). Fail-closed per G4: model cannot have reviewed the full surface."
+            exit 1
+          fi
           case "${verdict_upper}" in
             APPROVE|COMMENT)
               echo "Verdict: ${verdict_upper} (raw: ${raw_verdict}) — no blocking concerns."
@@ -432,8 +481,11 @@ jobs:
           echo "PR diff: ${diff_bytes} bytes"
           if [ "${diff_bytes}" -gt 204800 ]; then
             head -c 204800 ../pr_diff.patch > ../pr_diff.truncated
-            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> ../pr_diff.truncated
+            printf '\n[!!! diff truncated at 200 KB — fail-closed: REQUEST_CHANGES if you cannot verify the full surface !!!]\n' >> ../pr_diff.truncated
             mv ../pr_diff.truncated ../pr_diff.patch
+            # G4 (cosmic-flute §45.12.5.5): emit diff_truncated=true so the
+            # Enforce verdict step can fail-closed if verdict != REQUEST_CHANGES.
+            echo "diff_truncated=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run Codex review
@@ -514,11 +566,49 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Stale-SHA guard (G2-residual — cosmic-flute §45.12.5.5)
+        # Defense-in-depth atop concurrency cancellation (which handles the
+        # common case where a newer push cancels the older run before it
+        # finishes). If the PR was force-pushed AFTER compute-diff but BEFORE
+        # this step AND the cancellation arrived mid-step (so an older run
+        # survives), this guard bails the OLDER run's Enforce verdict so the
+        # NEWER cancelling run produces the authoritative verdict.
+        #
+        # Implementation: re-query the PR's current head.sha from the GitHub
+        # API + compare against PR_HEAD_AT_DIFF (the head.sha captured at
+        # workflow-start time via `${{ github.event.pull_request.head.sha }}`,
+        # which IS the diff-time SHA per GHA workflow-event semantics).
+        # Mismatch = stale run; set STALE_RUN_BAIL=1 to gate Enforce verdict.
+        # Idempotent + no-op when SHAs match (the common case).
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        env:
+          PR_HEAD_AT_DIFF: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt(process.env.PR_NUMBER, 10),
+            });
+            if (pr.data.head.sha !== process.env.PR_HEAD_AT_DIFF) {
+              core.warning(
+                `Stale run: PR head SHA drifted (${process.env.PR_HEAD_AT_DIFF} → ${pr.data.head.sha}). ` +
+                `Bailing Enforce verdict; newer cancelling run will produce authoritative verdict.`,
+              );
+              core.exportVariable('STALE_RUN_BAIL', '1');
+            }
+
       - name: Enforce verdict
         # Same hardening pattern as gpt-review per QG-§44 Phase 2 cycle 2
         # (findings 4d8a6e2f1b97-residual + 3d1f6e9c8a47): case-insensitive
         # sed + verdict-count guard.
-        if: always() && steps.diff.outputs.diff_empty != 'true'
+        #
+        # G2-residual (cosmic-flute §45.12.5.5): env.STALE_RUN_BAIL != '1'
+        # gates this step on the stale-SHA guard step's outcome. Symmetric
+        # pattern with gpt-review.
+        if: always() && steps.diff.outputs.diff_empty != 'true' && env.STALE_RUN_BAIL != '1'
         run: |
           if [ ! -s codex_review.md ]; then
             echo "::error::Codex review file missing or empty — fail closed."
@@ -541,6 +631,15 @@ jobs:
           raw_verdict=$(sed -n '/^## *Verdict/I,/^##/{/^## *Verdict/Id;/^##/d;/^$/d;p;}' codex_review.md \
             | head -1 | tr -d '`*' | xargs)
           verdict_upper=$(echo "${raw_verdict}" | awk '{print toupper($1)}')
+          # G4 (cosmic-flute §45.12.5.5): truncated-diff fail-closed gate.
+          # If the diff was truncated to 200 KB (compute-diff step emitted
+          # diff_truncated=true), the model cannot have verified the full
+          # surface — its verdict MUST be REQUEST_CHANGES. Even APPROVE/COMMENT
+          # on a truncated diff is unsafe; fail-closed here.
+          if [ "${{ steps.diff.outputs.diff_truncated }}" = "true" ] && [ "${verdict_upper}" != "REQUEST_CHANGES" ]; then
+            echo "::error::Diff was truncated to 200 KB but verdict is '${verdict_upper}' (not REQUEST_CHANGES). Fail-closed per G4: model cannot have reviewed the full surface."
+            exit 1
+          fi
           case "${verdict_upper}" in
             APPROVE|COMMENT)
               echo "Verdict: ${verdict_upper} (raw: ${raw_verdict}) — no blocking concerns."
@@ -637,8 +736,11 @@ jobs:
           echo "PR diff: ${diff_bytes} bytes"
           if [ "${diff_bytes}" -gt 204800 ]; then
             head -c 204800 ../pr_diff.patch > ../pr_diff.truncated
-            printf '\n[... diff truncated at 200 KB for review budget ...]\n' >> ../pr_diff.truncated
+            printf '\n[!!! diff truncated at 200 KB — fail-closed: REQUEST_CHANGES if you cannot verify the full surface !!!]\n' >> ../pr_diff.truncated
             mv ../pr_diff.truncated ../pr_diff.patch
+            # G4 (cosmic-flute §45.12.5.5): emit diff_truncated=true so the
+            # Enforce verdict step can fail-closed if verdict != REQUEST_CHANGES.
+            echo "diff_truncated=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run Claude review
@@ -802,10 +904,55 @@ jobs:
             const summaryFooter = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1 — Pilot). Accountable human reviewer: @ThermoclineLeviathan.*';
             await core.summary.addRaw(`${summaryHeader}\n\n${reviewBody}\n\n${summaryFooter}`).write();
 
+      - name: Stale-SHA guard (G2-residual — cosmic-flute §45.12.5.5)
+        # Defense-in-depth atop concurrency cancellation (which handles the
+        # common case where a newer push cancels the older run before it
+        # finishes). If the PR was force-pushed AFTER compute-diff but BEFORE
+        # this step AND the cancellation arrived mid-step (so an older run
+        # survives), this guard bails the OLDER run's Enforce verdict so the
+        # NEWER cancelling run produces the authoritative verdict.
+        #
+        # Implementation: re-query the PR's current head.sha from the GitHub
+        # API + compare against PR_HEAD_AT_DIFF (the head.sha captured at
+        # workflow-start time via `${{ github.event.pull_request.head.sha }}`,
+        # which IS the diff-time SHA per GHA workflow-event semantics).
+        # Mismatch = stale run; set STALE_RUN_BAIL=1 to gate Enforce verdict.
+        # Idempotent + no-op when SHAs match (the common case).
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        env:
+          PR_HEAD_AT_DIFF: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea  # v7
+        with:
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt(process.env.PR_NUMBER, 10),
+            });
+            if (pr.data.head.sha !== process.env.PR_HEAD_AT_DIFF) {
+              core.warning(
+                `Stale run: PR head SHA drifted (${process.env.PR_HEAD_AT_DIFF} → ${pr.data.head.sha}). ` +
+                `Bailing Enforce verdict; newer cancelling run will produce authoritative verdict.`,
+              );
+              core.exportVariable('STALE_RUN_BAIL', '1');
+            }
+
       - name: Enforce verdict
-        if: always()
+        # G2-residual (cosmic-flute §45.12.5.5): env.STALE_RUN_BAIL != '1'
+        # gates this step on the stale-SHA guard step's outcome. Symmetric
+        # pattern with gpt-review + codex-review.
+        if: always() && env.STALE_RUN_BAIL != '1'
         run: |
           verdict="${{ steps.verdict.outputs.verdict }}"
+          # G4 (cosmic-flute §45.12.5.5): truncated-diff fail-closed gate.
+          # See gpt-review enforce-verdict for full rationale. Symmetric pattern
+          # applied to claude-review using `verdict` (claude's verdict variable
+          # is already uppercased by the artifact-extract step's regex).
+          if [ "${{ steps.diff.outputs.diff_truncated }}" = "true" ] && [ "${verdict}" != "REQUEST_CHANGES" ]; then
+            echo "::error::Diff was truncated to 200 KB but Claude verdict is '${verdict}' (not REQUEST_CHANGES). Fail-closed per G4: model cannot have reviewed the full surface."
+            exit 1
+          fi
           case "${verdict}" in
             APPROVE|COMMENT)
               echo "Verdict: ${verdict} — no blocking concerns."
