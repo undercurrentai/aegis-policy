@@ -699,9 +699,17 @@ jobs:
           # artifact (not PR-comment scrape) — eliminates spoofability + stale-
           # run-prone classes entirely.
           # Added Write(claude_review.md) for artifact-based pipeline.
-          # C4 (Codex C2) will further narrow Bash(...) → Read(...) scope-gates.
+          #
+          # C4 (cosmic-flute §45.12.5.4): Codex C2 scope-gating. Narrowed
+          # generic `Read` to per-path Read(...) entries scoped to the
+          # verifier-kit review surface (../pr_diff.patch + keys/ + scripts/
+          # + policy/ + docs/architecture/adr/ + .github/). Removed Bash(cat
+          # ../pr_diff.patch) — Claude reads via Read, no shell escape hatch
+          # for arbitrary file reads. The remaining Bash(...) entries are
+          # for verifier-kit invariant checks (fingerprint sha256, error-
+          # class parity, fingerprint parity) that need shell execution.
           claude_args: |
-            --model claude-opus-4-6 --allowedTools "Read,Write(claude_review.md),Bash(cat ../pr_diff.patch),Bash(shasum -a 256 keys/*),Bash(python3 scripts/check_error_class_parity.py),Bash(python3 scripts/check_fingerprints.py)"
+            --model claude-opus-4-6 --allowedTools "Read(../pr_diff.patch),Read(keys/**),Read(scripts/**),Read(policy/**),Read(docs/architecture/adr/**),Read(.github/**),Write(claude_review.md),Bash(shasum -a 256 keys/*),Bash(python3 scripts/check_error_class_parity.py),Bash(python3 scripts/check_fingerprints.py)"
 
       - name: Post review comment (claude) with run-id + head-sha nonce
         # NEW-H1 (HIGH/C3 / cosmic-flute §45.12.5.2): body passed via
