@@ -19,7 +19,7 @@
 # Required-status-check target (org-Ruleset 17XXX, populated in §48 SP5 after
 # SP3 measures the resolved check name empirically): `aegis-gate / AEGIS Governance Gate`.
 #
-# Phase rollout (per docs/integration/dogfooding-guide.md):
+# Phase rollout (§48 calibration window; shadow_mode true -> false):
 #   - shadow_mode: true  + continue-on-error in aegis-enforce.yml -> advisory; HALT does not block merge
 #   - shadow_mode: false                                          -> enforcing; HALT blocks merge
 #
@@ -60,7 +60,7 @@ jobs:
     # job-key, so the cycle-2 fix dropped `name:`; this consumer mirrors that.
     uses: ./.github/workflows/aegis-enforce.yml
     with:
-      shadow_mode: true  # advisory; per docs/integration/dogfooding-guide.md calibration window (single source of truth)
+      shadow_mode: true  # advisory; per the §48 calibration window (single source of truth)
       proposal_summary: ${{ github.event.pull_request.title || github.event.merge_group.head_commit.message || 'merge-group' }}
       estimated_impact: medium
       change_type: feature

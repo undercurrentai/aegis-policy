@@ -34,13 +34,13 @@
 #         proposal_summary: "${{ github.event.pull_request.title }}"
 #         estimated_impact: "medium"
 #         change_type: "feature"
-#         # Parameter derivation defaults below mirror tools/ci/aegis_shadow_evaluate.py.
+#         # Parameter derivation defaults below encode the §48 enforce-substrate CI/CD-domain profile.
 #         # Calling repos may override for richer accuracy.
 #
 # Branch-protection required-status-check name: "aegis-gate / AEGIS Governance Gate"
 #   (GitHub renders required checks as "<job-id> / <job-name>" for reusable workflows.)
 #
-# Phase rollout (per dogfooding-guide.md):
+# Phase rollout (§48 calibration window; shadow_mode true -> false):
 #   - shadow_mode=true  + continue-on-error -> calibration window (~20 PRs minimum)
 #   - shadow_mode=false                     -> enforcement (HALT blocks merge)
 
@@ -68,7 +68,7 @@ on:
       risk_baseline:
         type: number
         default: 0.02
-        description: "Baseline risk (0.0-1.0). Per dogfooding-guide CI/CD domain default."
+        description: "Baseline risk (0.0-1.0). CI/CD-domain default per the §48 enforce-substrate calibration defaults."
       risk_proposed:
         type: number
         default: 0.04
