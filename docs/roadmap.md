@@ -17,7 +17,8 @@ Sprint 5 / E1-E3 + Sprint 6 / F1-F2 + Sprint 7 / G1-G3 of the rigor-aegis-attest
 | **Sprint 6 / F1 sub-phase 5** | ✅ shipped 2026-05-19 (cosmic-flute §37.21 ship capture) | Sprint 6/F1 SHIP COMPLETE — cosmic-flute §37.21 captures cumulative results across sub-phases 1-4 + lessons learned. Memory breadcrumb bumped to "Sprints 1-6/F1 of 7 SHIPPED". Mark cosmic-flute tasks #30 + #170 + #171 + #174 completed. Sprint 6/F2 + Sprint 7/G1-G3 readiness flipped 🟢 GREEN UNBLOCKED at protocol-correctness layer. | cosmic-flute §37.21 — Sprint 6/F1 SHIPPED capture |
 | **§38 (post-ship CTR-5/U3 closure + forensic-audit chain)** | ✅ shipped 2026-05-21 (aegis-governance v1.2.7 production deploy) | Cumulative 3-PR ship cycle on aegis-governance: PR #183 (`c570505`) primary §38 + PR #184 (`25420ca`) PyPI 1.1.0→1.1.1 yanked-collision hotfix + PR #185 (`f012a33`) Attest job step-order hotfix. Tag v1.2.7 → production transitioned v1.2.6 → v1.2.7. First v1.2.7 production decision_id `302693ce-…`; Tier-4e canonical proof PASS valid=True with REAL pinned keys from aegis-policy@cded778. ADR-013 forensic-audit chain via `aegis_evaluate_decision_id` DB column (Option D — predicate UNCHANGED + envelope wire format BYTE-IDENTICAL with v1.2.6). aegis-sdk 1.1.1 LIVE on PyPI (post yanked-1.1.0-collision PR #184 remediation per §37.14.7 release chain). §17 Critical 3 invariant `bypass_actors=[]` preserved across 9 cumulative sole-keyholder bypass cycles. aegis-policy main UNCHANGED at `cded778` (§38 D2-defer; Sprint 7/G1 task #185 picks up policy `informational_predicate_fields` update). Closes cosmic-flute tasks #196 + #197. See cosmic-flute §38.13. | aegis-governance v1.2.7 tag → Cloud Run revision atomic-shifted 100% to v1.2.7 |
 | **Sprint 6 / F2** | 🟢 GREEN UNBLOCKED — planned | `openclaw-operator-os/scripts/blue-green-deploy.sh` integration (dogfood across 3 substrates per cosmic-flute §11.7). Unblocked at protocol-correctness layer via §38 Option D architecture. | Separate plan + PR (on `openclaw-operator-os`); cosmic-flute task #31 |
-| **Sprint 7 / G1** | 🟢 GREEN UNBLOCKED — planned | Org-level GitHub Ruleset for required `aegis-attestation-verified` status check across all 19 (now 20) portfolio repos. Admin-level operation. NOTE: an attestation-stack-internal Ruleset (`aegis-attestation-required-checks`, id `16294975`) targeting `aegis-*` repos was already created during Sprint 5/E1.5 Phase 7 (2026-05-12); Sprint 7/G1 expands enforcement to the full 19-repo portfolio (`aegis-gtm`, `undercurrent-core`, `LIBERTAS-*`, etc.) AND ships the deferred verifier-kit hardening bundle per cosmic-flute task #185 (F2.2 Node test harness + U1+U2 filename rename hazard + U9/F1.3 try/catch warning + roadmap doc-flips). | Org settings change + aegis-policy hardening PR; cosmic-flute task #32 + #185 |
+| **Sprint 7 / G1 task #185 (verifier-kit + tri-AI hardening bundle)** | ✅ shipped 2026-05-26 (commit `5368700` + cycle-1 fix `d9056ef`) | 11-item bundle on aegis-policy closing all §37.18.16 + §44.20.3 P1.5 baseline #1 + §44.20.10.2 P1.5 baseline #2 deferred findings. PR #16 admin-squash-merged via **16th cumulative §34.17.2 sole-keyholder bypass cycle** (`5368700`); CI 7/7 GREEN on first push; AEGIS Stage-2 decision_id `78eab9b6-…` PAUSE 6/6 gates PASSED clean (no override required — first §45-class ship to clear novelty cleanly). 5 atomic commits, ~906 net LOC. Layers shipped: C1 dual-checkout BASE/HEAD + C2 comment-pipeline lockdown (NEW-H1 + NEW-H2 closure via artifact-based Claude verdict pipeline) + C3 verifier-kit semantics + Node test harness (F2.2 + U1+U2 + U9/F1.3 closure) + C4 Codex scope-gating + C5 stale-SHA + G3 + G4 truncation fail-closed. **Post-ship cycle-1 fix**: PR #17 admin-squash-merged via **17th cumulative bypass cycle** (`d9056ef`); cycle-1 caught a §45-introduced regression (claude-review Enforce verdict missing empty-diff skip clause) via dual-source Codex Lane A + Claude Lane B Agent 1 confirmation (MEDIUM/C3); AEGIS decision_id `84619c25-…` PAUSE 6/6 gates PASSED clean (Risk DECREASED Δ=-0.25). 12th historical scope-drift instance per §43.11 remediation-introduced sub-class. /quality-gate Phase 2 cycle-2 verification: 0/0 EXIT_CLEAN across 2 partitions. CHANGELOG [1.2.4]. See cosmic-flute §45 + §45.13 + §45.14. | aegis-policy v1.2.4 |
+| **Sprint 7 / G1 task #32 (org-Ruleset 19-repo expansion)** | 🟢 GREEN UNBLOCKED — planned | Org-level GitHub Ruleset for required `aegis-attestation-verified` status check across all 19 (now 20) portfolio repos. Admin-level operation. NOTE: an attestation-stack-internal Ruleset (`aegis-attestation-required-checks`, id `16294975`) targeting `aegis-*` repos was already created during Sprint 5/E1.5 Phase 7 (2026-05-12); Sprint 7/G1 expands enforcement to the full 19-repo portfolio (`aegis-gtm`, `undercurrent-core`, `LIBERTAS-*`, etc.). | Org settings change; cosmic-flute task #32 |
 | **Sprint 7 / G2** | 🟢 GREEN UNBLOCKED — planned | `aegis-gtm` pilot rollout — first non-aegis-governance consumer. Validates verifier-kit ergonomics for the typical Vercel-deployed website. | Separate plan + PR (on `aegis-gtm`); cosmic-flute task #33 |
 | **Sprint 7 / G3** | 🟢 GREEN UNBLOCKED — planned | Roll out to remaining 18 production-bound repos. Tracked via Linear when Step 2 of the operator-OS plan wires Linear webhook. | Linear epic per repo; cosmic-flute task #34 |
 
@@ -131,9 +132,20 @@ Out of the rigor-aegis-attestations protocol scope; planned for the cosmos-mixin
         └───────────────┬───────────────────────┘
                         │
                         ▼
+        ┌───────────────────────────────────────┐
+        │ Sprint 7/G1 task #185 (✅ shipped)     │
+        │ ✅ aegis-policy@5368700 + d9056ef      │
+        │ verifier-kit + tri-AI hardening bundle│
+        │ 11 items closed (C1+C2+C3+C4+C5)      │
+        │ 16th + 17th sole-keyholder bypass cycles│
+        │ /quality-gate cycle-2: 0/0 EXIT_CLEAN │
+        │ closes cosmic-flute #185               │
+        └───────────────┬───────────────────────┘
+                        │
+                        ▼
         🟢 Sprint 6/F2 (openclaw blue-green dogfood)
-        🟢 Sprint 7/G1 (org Ruleset 19-repo rollout + #185 verifier-kit hardening)
+        🟢 Sprint 7/G1 task #32 (org Ruleset 19-repo rollout — admin op)
         🟢 Sprint 7/G2 (aegis-gtm pilot)
         🟢 Sprint 7/G3 (18-repo Linear rollout)
-        ALL UNBLOCKED at architectural-contract layer per §38.13.7
+        ALL UNBLOCKED at architectural-contract layer per §38.13.7 + §45.13
 ```

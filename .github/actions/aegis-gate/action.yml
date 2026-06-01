@@ -1,0 +1,179 @@
+# AEGIS Governance Gate — Reusable GitHub Action
+#
+# Evaluates a proposal against AEGIS governance gates via the Cloud Run API.
+# Returns PROCEED / PAUSE / HALT / ESCALATE with confidence and rationale.
+#
+# Usage:
+#   - uses: undercurrentai/aegis-policy/.github/actions/aegis-gate@<SHA>
+#     with:
+#       api_key: ${{ secrets.AEGIS_API_KEY }}
+#       proposal_summary: "Deploy new authentication service"
+#       estimated_impact: "high"
+
+name: 'AEGIS Governance Gate'
+description: 'Evaluate a proposal against AEGIS governance gates via Cloud Run API'
+
+inputs:
+  api_key:
+    description: 'AEGIS API key (from portal.undercurrentholdings.com). Store as a GitHub secret.'
+    required: true
+  api_url:
+    description: 'AEGIS API base URL'
+    required: false
+    default: 'https://api.aegis.undercurrentholdings.com'
+  proposal_summary:
+    description: 'Brief description of the proposed change'
+    required: true
+  estimated_impact:
+    description: 'Impact level: low, medium, high, critical'
+    required: true
+    default: 'medium'
+  change_type:
+    description: 'Change type: feature, refactor, bugfix, config'
+    required: false
+    default: 'feature'
+  risk_score:
+    description: 'Risk score (0.0 - 1.0). Alias for risk_proposed.'
+    required: false
+    default: '0.0'
+  risk_baseline:
+    description: 'Risk baseline (0.0 - 1.0)'
+    required: false
+    default: '0.0'
+  profit_proposed:
+    description: 'Proposed profit metric'
+    required: false
+    default: '0.0'
+  profit_baseline:
+    description: 'Profit baseline metric'
+    required: false
+    default: '0.0'
+  novelty_score:
+    description: 'Novelty score (0.0 - 1.0)'
+    required: false
+    default: '0.5'
+  complexity_score:
+    description: 'Complexity score (0.0 - 1.0, higher = simpler)'
+    required: false
+    default: '0.5'
+  quality_score:
+    description: 'Quality score (0.0 - 1.0)'
+    required: false
+    default: '0.7'
+  agent_id:
+    description: 'Agent/caller identifier'
+    required: false
+    default: 'github-actions'
+  fail_on_halt:
+    description: 'Fail the workflow if AEGIS returns HALT'
+    required: false
+    default: 'true'
+
+outputs:
+  status:
+    description: 'AEGIS decision status (proceed, pause, halt, escalate)'
+    value: ${{ steps.evaluate.outputs.status }}
+  confidence:
+    description: 'Decision confidence score'
+    value: ${{ steps.evaluate.outputs.confidence }}
+  rationale:
+    description: 'Decision rationale'
+    value: ${{ steps.evaluate.outputs.rationale }}
+  decision_json:
+    description: 'Full decision JSON'
+    value: ${{ steps.evaluate.outputs.decision_json }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Evaluate proposal
+      id: evaluate
+      shell: bash
+      env:
+        AEGIS_API_KEY: ${{ inputs.api_key }}
+        AEGIS_API_URL: ${{ inputs.api_url }}
+        INPUT_PROPOSAL_SUMMARY: ${{ inputs.proposal_summary }}
+        INPUT_ESTIMATED_IMPACT: ${{ inputs.estimated_impact }}
+        INPUT_CHANGE_TYPE: ${{ inputs.change_type }}
+        INPUT_RISK_SCORE: ${{ inputs.risk_score }}
+        INPUT_RISK_BASELINE: ${{ inputs.risk_baseline }}
+        INPUT_PROFIT_PROPOSED: ${{ inputs.profit_proposed }}
+        INPUT_PROFIT_BASELINE: ${{ inputs.profit_baseline }}
+        INPUT_NOVELTY_SCORE: ${{ inputs.novelty_score }}
+        INPUT_COMPLEXITY_SCORE: ${{ inputs.complexity_score }}
+        INPUT_QUALITY_SCORE: ${{ inputs.quality_score }}
+        INPUT_AGENT_ID: ${{ inputs.agent_id }}
+      run: |
+        # Build proposal payload (uses env vars to prevent script injection)
+        PAYLOAD=$(python3 -c "
+        import json, os
+        body = {
+            'proposal_summary': os.environ['INPUT_PROPOSAL_SUMMARY'],
+            'estimated_impact': os.environ['INPUT_ESTIMATED_IMPACT'],
+            'change_type': os.environ['INPUT_CHANGE_TYPE'],
+            'risk_proposed': float(os.environ['INPUT_RISK_SCORE']),
+            'risk_baseline': float(os.environ['INPUT_RISK_BASELINE']),
+            'profit_proposed': float(os.environ['INPUT_PROFIT_PROPOSED']),
+            'profit_baseline': float(os.environ['INPUT_PROFIT_BASELINE']),
+            'novelty_score': float(os.environ['INPUT_NOVELTY_SCORE']),
+            'complexity_score': float(os.environ['INPUT_COMPLEXITY_SCORE']),
+            'quality_score': float(os.environ['INPUT_QUALITY_SCORE']),
+            'agent_id': os.environ['INPUT_AGENT_ID'],
+        }
+        print(json.dumps(body))
+        ")
+
+        # Call AEGIS Cloud Run API
+        HTTP_CODE=$(curl -s -o /tmp/aegis-response.json -w "%{http_code}" \
+          -X POST "${AEGIS_API_URL}/evaluate" \
+          -H "Authorization: Bearer ${AEGIS_API_KEY}" \
+          -H "Content-Type: application/json" \
+          -d "${PAYLOAD}" \
+          --max-time 30)
+
+        if [ "${HTTP_CODE}" -ne 200 ]; then
+          echo "::error::AEGIS API returned HTTP ${HTTP_CODE}"
+          cat /tmp/aegis-response.json
+          exit 1
+        fi
+
+        # Parse response
+        DECISION=$(cat /tmp/aegis-response.json)
+
+        STATUS=$(echo "${DECISION}" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+        CONFIDENCE=$(echo "${DECISION}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('confidence', 'N/A'))")
+        RATIONALE=$(echo "${DECISION}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('rationale', 'N/A'))")
+
+        # Use heredoc delimiters to prevent multi-line injection in GITHUB_OUTPUT
+        {
+          echo "status=${STATUS}"
+          echo "confidence=${CONFIDENCE}"
+          echo "rationale<<AEGIS_EOF"
+          echo "${RATIONALE}"
+          echo "AEGIS_EOF"
+          echo "decision_json<<AEGIS_JSON_EOF"
+          echo "${DECISION}"
+          echo "AEGIS_JSON_EOF"
+        } >> $GITHUB_OUTPUT
+
+        # Summary
+        echo "### AEGIS Governance Decision" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+        echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+        echo "| **Status** | \`${STATUS}\` |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Confidence** | ${CONFIDENCE} |" >> $GITHUB_STEP_SUMMARY
+        echo "| **Rationale** | ${RATIONALE} |" >> $GITHUB_STEP_SUMMARY
+
+    - name: Check gate result
+      if: inputs.fail_on_halt == 'true'
+      shell: bash
+      env:
+        GATE_STATUS: ${{ steps.evaluate.outputs.status }}
+        GATE_RATIONALE: ${{ steps.evaluate.outputs.rationale }}
+      run: |
+        if [ "${GATE_STATUS}" = "halt" ]; then
+          echo "::error::AEGIS governance gate returned HALT: ${GATE_RATIONALE}"
+          exit 1
+        fi
+        echo "AEGIS governance gate passed: ${GATE_STATUS}"

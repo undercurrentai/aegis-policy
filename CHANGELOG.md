@@ -6,6 +6,20 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 
 ---
 
+## [1.2.5] — 2026-05-31
+
+**Sprint 7/G1 SP2 — aegis-enforce-caller.yml advisory AEGIS Governance Gate (shadow mode).** First cross-repo consumer of the §48 reusable-workflow substrate: aegis-policy now invokes aegis-governance's `aegis-enforce.yml` reusable workflow (SHA-pinned at `dd64b902`) as the canonical PR-time governance gate, mirroring the aegis-governance SP1 self-dogfood caller modulo the header comment, the cross-repo `uses:` reference, and the consumer-specific `agent_id`. Advisory only (`shadow_mode: true` + `continue-on-error` in the reusable workflow) during the §48 calibration window — HALT does not block merge yet. ZERO production runtime impact; ZERO change to the verifier-kit, reusable workflow inputs/outputs, or the cross-repo aegis-governance consumer pin (`cded778` unchanged).
+
+### Added
+
+- **`.github/workflows/aegis-enforce-caller.yml`** (NEW) — cross-repo caller consuming `undercurrentai/aegis-governance/.github/workflows/aegis-enforce.yml@dd64b902c553bcda05fe2f0aff54791089a53329`. Job key `aegis-gate` (no `name:` field) resolves the required-check-to-be `aegis-gate / AEGIS Governance Gate` per GitHub Docs reusable-workflow naming (`<caller-job-id> / <reusable-job-name>`) — the uniform check string a single org-Ruleset entry (17XXX, populated in §48 SP5) will cover across all Sprint 7 source + consumer repos (cosmic-flute §48/§50). Per §48.15 R2: NO `paths:` filter on `pull_request` (required checks must fire on every PR including docs-only PRs to avoid the "Waiting for status to be reported" merge-hang per community #54877). Per §48.15 R3: job key `aegis-gate` is byte-identical to the aegis-governance SP1 caller's job key so the resolved check name is uniform. Triggers on `pull_request` (branches `[main, master]`) + `merge_group`; concurrency `cancel-in-progress: true`; permissions `{contents: read, checks: write, pull-requests: write}` (the checks/PR-write grants are the reusable-workflow effective-perms INTERSECTION fix); `secrets: inherit`; inputs `shadow_mode: true`, `estimated_impact: medium`, `change_type: feature`, `agent_id: github-actions-aegis-policy-cross-repo-consumer`.
+
+### Changed
+
+- **aegis-policy version 1.2.4 → 1.2.5** (PATCH per SemVer; additive CI workflow only; ZERO production runtime impact; reusable workflow inputs/outputs UNCHANGED; verifier-kit UNCHANGED; cross-repo aegis-governance consumer pin at `cded778` unaffected).
+
+---
+
 ## [1.2.4] — 2026-05-26
 
 **Sprint 7/G1 task #185 — verifier-kit + tri-AI second-reviewer hardening bundle (11 deferred findings closed).** Closes the deferred-finding ledger from §37.18.16 (3 verifier-kit hardenings: F2.2 + U1+U2 + U9/F1.3) + §44.20.3 P1.5 baseline #1 (Codex C1+C2 + GPT G1+G2+G3+G4) + §44.20.10.2 P1.5 baseline #2 (NEW-H1 + NEW-H2 HIGH/C3). 5 prior /quality-gate Phase 2 bug-hunt cycles missed all 11 findings; the §44 tri-AI panel produced value single-pass review misses. Single PR + 5 commits + 6 files; ZERO production runtime impact; ZERO cross-repo aegis-governance consumer impact (consumer pin `cded778` unchanged).
