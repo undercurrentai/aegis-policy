@@ -15,7 +15,11 @@
 # as ./.github/actions/aegis-gate. See cosmic-flute §48 + the
 # aegis-enforce-caller.yml relocation-pivot header.
 #
-# Usage from a calling repo (e.g., undercurrent-core, libertas-cicd, AgoraIV):
+# Usage from a calling repo (e.g., undercurrent-core, libertas-cicd, AgoraIV).
+# Cross-repo `uses:` is fully supported as of cosmic-flute §51 — the reusable
+# workflow self-checks-out aegis-policy via the resolve_callee step (job.workflow_*
+# primary + referenced_workflows API fallback), so the `./aegis-policy/...`
+# composite reference resolves correctly from any caller repo (QG48-15).
 #
 #   jobs:
 #     ci-success:
@@ -28,7 +32,12 @@
 #       uses: undercurrentai/aegis-policy/.github/workflows/aegis-enforce.yml@<SHA>
 #       needs: [ci-success]
 #       if: needs.ci-success.result == 'success'
-#       secrets: inherit
+#       permissions:           # §51/QG48-5: effective perms = caller ∩ reusable — grant these so the reusable's job has them
+#         contents: read
+#         checks: write        #   Checks-API verdict attach
+#         actions: read        #   referenced_workflows API fallback in resolve_callee (cross-repo self-checkout)
+#       secrets:               # QG48-12: pass ONLY the needed secret (NOT `secrets: inherit`)
+#         AEGIS_API_KEY: ${{ secrets.AEGIS_API_KEY }}
 #       with:
 #         shadow_mode: true          # flip to false once calibrated (≥20 PRs, ≥50% PROCEED)
 #         proposal_summary: "${{ github.event.pull_request.title }}"
@@ -48,6 +57,11 @@ name: AEGIS Governance Gate (Reusable)
 
 on:
   workflow_call:
+    # QG48-D8: this input surface is the SINGLE public contract for AEGIS gating.
+    # It is a deliberate 1:1 passthrough to the INTERNAL aegis-gate composite (the
+    # canonical metric schema). GitHub Actions has no input-inheritance, so the
+    # passthrough is mapped explicitly in the `aegis-gate` step below; treat the
+    # composite's action.yml as the schema source of truth when adding inputs.
     inputs:
       shadow_mode:
         type: boolean
@@ -84,7 +98,10 @@ on:
       novelty_score:
         type: number
         default: 0.85
-        description: "Novelty (0.0-1.0). By change_type: docs=skip, config=0.3, deps=0.5, code=0.85, infra=0.95."
+        # QG48-D3: derivation guidance keyed to the change_type enum above
+        # (feature | refactor | bugfix | config) — a single taxonomy, not the
+        # prior docs/deps/code/infra second taxonomy.
+        description: "Novelty (0.0-1.0; higher = more unprecedented). Suggested by change_type: config≈0.3, bugfix≈0.5, refactor≈0.7, feature≈0.85."
       complexity_score:
         type: number
         default: 0.75
@@ -108,9 +125,9 @@ on:
 
 permissions:
   contents: read
-  actions: read   # §51: required by the referenced_workflows API fallback in the resolve_callee step (cross-repo self-checkout)
-  checks: write
-  pull-requests: write
+  actions: read   # §51: referenced_workflows API fallback in resolve_callee (cross-repo self-checkout)
+  checks: write   # github-script Checks-API attach + composite STEP_SUMMARY
+  # QG48-5: NO pull-requests:write — no step writes PR comments (intentionally minimal scope).
 
 jobs:
   aegis-gate:
@@ -356,20 +373,43 @@ jobs:
               summary += `<details><summary>Full decision JSON</summary>\n\n\`\`\`json\n${decisionJson}\n\`\`\`\n\n</details>`;
             }
 
-            await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'AEGIS Governance',
-              head_sha: context.sha,
-              status: 'completed',
-              conclusion: conclusion,
-              output: {
-                title: title,
-                summary: summary,
-              },
-            });
+            // QG48-13: published Checks-API run name disambiguated from the
+            // REQUIRED status check `aegis-gate / AEGIS Governance Gate` (the
+            // job-resolved name enforced by org-Ruleset 17101026). Near-identical
+            // names invited a misconfig where this advisory detail-run could be
+            // marked required instead of the real gating check.
+            const CHECK_NAME = 'AEGIS Governance (advisory verdict detail)';
 
-            core.info(`AEGIS verdict attached as Checks API run: ${conclusion}`);
+            // QG48-11: dedup + try/catch. List existing runs for this SHA+name and
+            // UPDATE rather than stacking a new run on every re-run; wrap so a
+            // transient Checks-API failure degrades gracefully (the workflow
+            // summary + step outputs still carry the verdict) instead of failing
+            // this always() step.
+            try {
+              const { data: existing } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.sha,
+                check_name: CHECK_NAME,
+              });
+              const runs = (existing && existing.check_runs) || [];
+              const payload = {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                status: 'completed',
+                conclusion: conclusion,
+                output: { title: title, summary: summary },
+              };
+              if (runs.length > 0) {
+                await github.rest.checks.update({ ...payload, check_run_id: runs[0].id });
+                core.info(`Updated existing "${CHECK_NAME}" check run ${runs[0].id}: ${conclusion}`);
+              } else {
+                await github.rest.checks.create({ ...payload, name: CHECK_NAME, head_sha: context.sha });
+                core.info(`Created "${CHECK_NAME}" check run: ${conclusion}`);
+              }
+            } catch (e) {
+              core.warning(`Failed to attach the AEGIS verdict as a Checks API run: ${e.message}. The workflow summary + step outputs still carry the verdict.`);
+            }
 
       - name: Workflow summary
         if: always()
