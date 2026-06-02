@@ -340,7 +340,11 @@ jobs:
 
       - name: Attach AEGIS verdict as Checks API run
         if: always()
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        # §51 QG-cycle-1 (I-2): unified to the SAME v9.0.0 SHA the resolve_callee
+        # step uses (the Octokit checks.* calls are action-major-independent; this
+        # eliminates the v9/v7 skew + Dependabot double-bump noise in the single
+        # public enforcement workflow).
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           AEGIS_STATUS: ${{ steps.aegis.outputs.status }}
           AEGIS_CONFIDENCE: ${{ steps.aegis.outputs.confidence }}
@@ -423,6 +427,11 @@ jobs:
           AEGIS_RATIONALE: ${{ steps.aegis.outputs.rationale }}
           SHADOW_MODE: ${{ inputs.shadow_mode }}
         run: |
+          # §51 QG-cycle-1 (completes QG48-10): collapse newlines + escape `|` so
+          # untrusted rationale cannot break the markdown table or inject extra rows.
+          # Mirrors the composite's action.yml escape — this duplicate summary
+          # location in the reusable workflow was missed in §51 Commit 2.
+          RATIONALE_MD=$(printf '%s' "${AEGIS_RATIONALE:-N/A}" | tr '\n' ' ' | sed 's/|/\\|/g')
           {
             echo "## AEGIS Governance Gate"
             echo ""
@@ -431,7 +440,7 @@ jobs:
             echo "| **Status** | \`${AEGIS_STATUS:-error}\` |"
             echo "| **Confidence** | ${AEGIS_CONFIDENCE:-N/A} |"
             echo "| **Mode** | ${SHADOW_MODE} (true = advisory, false = enforcing) |"
-            echo "| **Rationale** | ${AEGIS_RATIONALE:-N/A} |"
+            echo "| **Rationale** | ${RATIONALE_MD} |"
             echo ""
             if [ "${SHADOW_MODE}" = "true" ]; then
               echo "_Shadow mode: advisory only, does not block merge regardless of verdict._"

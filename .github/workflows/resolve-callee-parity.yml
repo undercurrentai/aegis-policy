@@ -10,7 +10,7 @@ name: resolve_callee parity + Node tests
 #      Mismatch = build failure. This is the load-bearing invariant: the
 #      .mjs file (which the Node test harness imports) MUST stay in sync
 #      with the inline body (which runs in production CI).
-#   2. NODE TESTS: runs the 7-test harness in tests/test_verify_attestation_node.mjs
+#   2. NODE TESTS: runs the 9-test harness in tests/test_verify_attestation_node.mjs
 #      which exercises each branch of resolve() with mocked Octokit + core.
 #   3. INVARIANTS: existing pytest workflow-invariants suite + error-class +
 #      fingerprint parity (these run elsewhere; this workflow just adds
@@ -126,5 +126,5 @@ jobs:
           done
           exit "$rc"
 
-      - name: Run Node test harness (F2.2 — 7 tests)
+      - name: Run Node test harness (F2.2 — 9 tests)
         run: node --test tests/test_verify_attestation_node.mjs

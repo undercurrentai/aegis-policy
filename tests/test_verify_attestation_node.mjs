@@ -1,7 +1,7 @@
 // test_verify_attestation_node.mjs — F2.2 Node test harness for the
 // resolve_callee step body shared by .github/workflows/aegis-verify-attestation.yml
-// AND .github/workflows/aegis-enforce.yml (cosmic-flute §45.12.5.3 7-test
-// enumeration + §37.18.16 F2.2 closure + §51 tests 8-9 for the
+// AND .github/workflows/aegis-enforce.yml (cosmic-flute §45.12.5.3 9-test
+// enumeration: 7 per F2.2 + §37.18.16 closure + §51 tests 8-9 for the
 // REUSABLE_WORKFLOW_FILENAME env-parameterized shared resolver).
 //
 // What this exercises that the pre-C3 regression tests in
@@ -68,7 +68,7 @@ function resetEnv() {
   process.env.REUSABLE_WORKFLOW_FILENAME = 'aegis-verify-attestation.yml';
 }
 
-// === 7 test cases per cosmic-flute §45.12.5.3 ===
+// === 9 test cases (7 per cosmic-flute §45.12.5.3 F2.2 + tests 8-9 per §51) ===
 
 test('1. Primary path: job.workflow_* populated → returns callee values without API call', async () => {
   resetEnv();

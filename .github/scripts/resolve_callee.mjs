@@ -1,16 +1,17 @@
 // resolve_callee.mjs — standalone ESM module (cosmic-flute §45.12.5.3 F2.2).
 //
-// Mirrors the inline github-script body for the resolve_callee step of
-// .github/workflows/aegis-verify-attestation.yml. The Node test harness
+// Mirrors the inline github-script body for the resolve_callee step of BOTH
+// .github/workflows/aegis-verify-attestation.yml AND aegis-enforce.yml (shared
+// via the REUSABLE_WORKFLOW_FILENAME env var, §51). The Node test harness
 // at tests/test_verify_attestation_node.mjs imports resolve() from this
 // file and exercises each branch with mocked Octokit + core (per cosmic-
-// flute §45.12.5.3 7-test enumeration).
+// flute §45.12.5.3 9-test enumeration).
 //
-// PARITY INVARIANT (load-bearing constraint, enforced by the resolve-
-// callee-parity CI job in aegis-verify-attestation.yml): the content
+// PARITY INVARIANT (load-bearing constraint, enforced by the
+// resolve-callee-parity.yml CI workflow): the content
 // between the parity-begin and parity-end marker lines below MUST equal
-// the body of the inline `script: |` block in aegis-verify-attestation.yml
-// (after PyYAML/yq dedent). Both files use the same literal marker tokens
+// the body of the inline `script: |` block in BOTH aegis-verify-attestation.yml
+// AND aegis-enforce.yml (after PyYAML/yq dedent). All three use the same literal marker tokens
 // (which appear ONLY in the function body below, NOT in this file header,
 // so the awk extraction triggers exactly once at the function-body boundary).
 //
@@ -19,7 +20,7 @@
 // the function-body content below is intentionally NOT indented (function-
 // body at 0-indent, not the conventional 2-indent).
 //
-// Test harness mock contract (per cosmic-flute §45.12.5.3 + the 7-test
+// Test harness mock contract (per cosmic-flute §45.12.5.3 + the 9-test
 // enumeration in tests/test_verify_attestation_node.mjs):
 //   - github.rest.actions.getWorkflowRun: mock to return
 //     { data: { referenced_workflows: [...] } }
