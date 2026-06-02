@@ -75,18 +75,22 @@ if (!jobRepo || !jobSha) {
   // defense-in-depth — referenced_workflows is server-computed so
   // forgery is theoretical, but cheap to harden).
   //
-  // U1+U2 (cosmic-flute §45.12.5.3 + §37.18.16): filename literal
-  // extracted to REUSABLE_WORKFLOW_FILENAME const so a future
-  // workflow rename can update it in one place + the regression
-  // test in tests/test_verify_attestation_node.mjs asserts parity
-  // between the const + the actual workflow filename. Closes the
-  // rename hazard where SELF_REGEX would silently throw on every
-  // invocation if someone renamed the file but missed this regex.
+  // U1+U2 (cosmic-flute §45.12.5.3 + §37.18.16) + §51/QG48-D8: the
+  // filename is supplied by the caller workflow via the
+  // REUSABLE_WORKFLOW_FILENAME env var (NOT hardcoded) so this single
+  // resolver is shared byte-for-byte across BOTH reusable workflows that
+  // need cross-repo self-checkout — aegis-verify-attestation.yml AND
+  // aegis-enforce.yml — with no duplicate-resolver drift magnet. The
+  // Node test harness sets this env var per-consumer; the parity CI gate
+  // diffs BOTH inline bodies against this .mjs marker region.
   //
   // Path format (per GitHub REST API):
   //   <owner>/<repo>/.github/workflows/<file>.yml@<ref>
   // The optional `@<ref>` suffix appears for cross-repo references.
-  const REUSABLE_WORKFLOW_FILENAME = 'aegis-verify-attestation.yml';
+  const REUSABLE_WORKFLOW_FILENAME = process.env.REUSABLE_WORKFLOW_FILENAME || '';
+  if (!REUSABLE_WORKFLOW_FILENAME) {
+    throw new Error('REUSABLE_WORKFLOW_FILENAME env var not set; cannot build SELF_REGEX (caller workflow step must set it in env:)');
+  }
   const SELF_REGEX = new RegExp(
     `^([^/]+)/([^/]+)/\\.github/workflows/${REUSABLE_WORKFLOW_FILENAME.replace(/\./g, '\\.')}(?:@.*)?$`,
   );

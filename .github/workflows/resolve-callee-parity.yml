@@ -26,6 +26,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/aegis-verify-attestation.yml'
+      - '.github/workflows/aegis-enforce.yml'
       - '.github/workflows/resolve-callee-parity.yml'
       - '.github/scripts/resolve_callee.mjs'
       - 'tests/test_verify_attestation_node.mjs'
@@ -33,6 +34,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/aegis-verify-attestation.yml'
+      - '.github/workflows/aegis-enforce.yml'
       - '.github/scripts/resolve_callee.mjs'
 
 permissions:
@@ -64,13 +66,16 @@ jobs:
       - name: Install PyYAML (PR head workspace)
         run: pip install --quiet "PyYAML>=6.0"
 
-      - name: Extract inline YAML body + .mjs body
+      - name: Extract inline YAML bodies + .mjs body
         run: |
           set -euo pipefail
           mkdir -p /tmp/parity
-          # Inline YAML body via PyYAML (strips common indent per `script: |`
-          # block scalar dedent rules)
-          python3 - <<'PYEOF' > /tmp/parity/inline-body.js
+          # §51/QG48-D8: BOTH reusable workflows (aegis-verify-attestation.yml +
+          # aegis-enforce.yml) embed the SAME resolve_callee body — the filename
+          # is REUSABLE_WORKFLOW_FILENAME-parameterized so a single .mjs is shared.
+          # Each inline body MUST be byte-identical to the .mjs marker region.
+          # Extract each via PyYAML (strips `script: |` block-scalar common indent).
+          python3 - <<'PYEOF' > /tmp/parity/inline-body-verify.js
           import yaml
           with open('.github/workflows/aegis-verify-attestation.yml') as f:
               doc = yaml.safe_load(f)
@@ -80,22 +85,46 @@ jobs:
                   break
           PYEOF
 
+          python3 - <<'PYEOF' > /tmp/parity/inline-body-enforce.js
+          import yaml
+          with open('.github/workflows/aegis-enforce.yml') as f:
+              doc = yaml.safe_load(f)
+          for step in doc['jobs']['aegis-gate']['steps']:
+              if step.get('id') == 'resolve_callee':
+                  print(step['with']['script'], end='')
+                  break
+          PYEOF
+
           # .mjs body between parity markers (exclusive; markers themselves stripped)
           awk '/=== BEGIN_INLINE_PARITY ===/{flag=1;next}/=== END_INLINE_PARITY ===/{flag=0}flag' \
             .github/scripts/resolve_callee.mjs > /tmp/parity/mjs-body.js
 
-          echo "Line counts:"
-          wc -l /tmp/parity/inline-body.js /tmp/parity/mjs-body.js
+          # U5 (accepted-findings §45 row 33): fail LOUDLY if any extraction came
+          # back empty — a renamed step id / job key / marker must surface as
+          # "extraction failed", not a misleading huge diff.
+          for f in inline-body-verify inline-body-enforce mjs-body; do
+            if [ ! -s "/tmp/parity/$f.js" ]; then
+              echo "::error::Parity extraction produced empty /tmp/parity/$f.js — a step id, job key, or marker was likely renamed. Fix the extraction before trusting the diff."
+              exit 1
+            fi
+          done
 
-      - name: Diff inline-body vs mjs-body (parity gate)
+          echo "Line counts:"
+          wc -l /tmp/parity/inline-body-verify.js /tmp/parity/inline-body-enforce.js /tmp/parity/mjs-body.js
+
+      - name: Diff inline bodies vs mjs-body (parity gate — both consumers)
         run: |
           set -euo pipefail
-          if diff /tmp/parity/inline-body.js /tmp/parity/mjs-body.js; then
-            echo "✓ Parity holds — inline YAML body byte-identical to .mjs body between markers."
-          else
-            echo "::error::Parity gate failed. The inline resolve_callee body in aegis-verify-attestation.yml has drifted from .github/scripts/resolve_callee.mjs (between the === BEGIN_INLINE_PARITY === / === END_INLINE_PARITY === markers). Edit BOTH files together so future-Claude can trust the test harness covers the production code path."
-            exit 1
-          fi
+          rc=0
+          for consumer in verify enforce; do
+            if diff "/tmp/parity/inline-body-$consumer.js" /tmp/parity/mjs-body.js; then
+              echo "✓ Parity holds ($consumer) — inline YAML body byte-identical to .mjs body between markers."
+            else
+              echo "::error::Parity gate failed for the $consumer consumer. Its inline resolve_callee body has drifted from .github/scripts/resolve_callee.mjs (between the === BEGIN_INLINE_PARITY === / === END_INLINE_PARITY === markers). Edit the .mjs + BOTH workflow inline bodies together so the Node test harness covers the production code path."
+              rc=1
+            fi
+          done
+          exit "$rc"
 
       - name: Run Node test harness (F2.2 — 7 tests)
         run: node --test tests/test_verify_attestation_node.mjs
