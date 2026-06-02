@@ -1,6 +1,8 @@
 // test_verify_attestation_node.mjs — F2.2 Node test harness for the
-// resolve_callee step body in .github/workflows/aegis-verify-attestation.yml
-// (cosmic-flute §45.12.5.3 7-test enumeration + §37.18.16 F2.2 closure).
+// resolve_callee step body shared by .github/workflows/aegis-verify-attestation.yml
+// AND .github/workflows/aegis-enforce.yml (cosmic-flute §45.12.5.3 9-test
+// enumeration: 7 per F2.2 + §37.18.16 closure + §51 tests 8-9 for the
+// REUSABLE_WORKFLOW_FILENAME env-parameterized shared resolver).
 //
 // What this exercises that the pre-C3 regression tests in
 // tests/test_workflow_invariants.py CAN'T:
@@ -58,9 +60,15 @@ function resetEnv() {
   delete process.env.JOB_WORKFLOW_REPOSITORY;
   delete process.env.JOB_WORKFLOW_SHA;
   delete process.env.GITHUB_RUN_ID;
+  // §51: the resolver now reads the filename from REUSABLE_WORKFLOW_FILENAME
+  // (parameterized so the single resolve_callee.mjs is shared across
+  // aegis-verify-attestation.yml + aegis-enforce.yml). Tests 1-7 use the verify
+  // fixtures, so default to that filename here; test 8 overrides to the enforce
+  // consumer and test 9 deletes it to exercise the missing-env guard.
+  process.env.REUSABLE_WORKFLOW_FILENAME = 'aegis-verify-attestation.yml';
 }
 
-// === 7 test cases per cosmic-flute §45.12.5.3 ===
+// === 9 test cases (7 per cosmic-flute §45.12.5.3 F2.2 + tests 8-9 per §51) ===
 
 test('1. Primary path: job.workflow_* populated → returns callee values without API call', async () => {
   resetEnv();
@@ -243,4 +251,66 @@ test('7. U9 empty-.sha: entry has .ref but no .sha → core.warning emitted; fal
   assert.match(u9Warning, /pin by commit SHA/);
   // Falls back to .ref
   assert.equal(core.calls.setOutput.ref, 'refs/heads/main');
+});
+
+// === §51 additions: REUSABLE_WORKFLOW_FILENAME env-parameterization (QG48-D8 shared resolver) ===
+
+test('8. §51 env-parameterized filename: REUSABLE_WORKFLOW_FILENAME=aegis-enforce.yml targets the enforce consumer', async () => {
+  resetEnv();
+  process.env.REUSABLE_WORKFLOW_FILENAME = 'aegis-enforce.yml';   // override the verify default
+  process.env.GITHUB_RUN_ID = '99999';
+
+  const core = makeMockCore();
+  // Two entries: a verify-attestation entry that MUST be IGNORED (wrong
+  // filename) + the enforce entry that MUST be selected. Proves the env-driven
+  // SELF_REGEX targets the correct consumer when the shared resolver runs for
+  // aegis-enforce.yml.
+  const github = makeMockGithub({
+    referenced_workflows: [
+      {
+        path: 'undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@1111111111111111111111111111111111111111',
+        sha: '1111111111111111111111111111111111111111',
+        ref: 'refs/heads/main',
+      },
+      {
+        path: 'undercurrentai/aegis-policy/.github/workflows/aegis-enforce.yml@2222222222222222222222222222222222222222',
+        sha: '2222222222222222222222222222222222222222',
+        ref: 'refs/heads/main',
+      },
+    ],
+  });
+  const context = makeMockContext();
+
+  await resolve(github, context, core);
+
+  // Resolves the aegis-enforce.yml entry, NOT the verify-attestation entry
+  assert.equal(core.calls.setOutput.repository, 'undercurrentai/aegis-policy');
+  assert.equal(core.calls.setOutput.ref, '2222222222222222222222222222222222222222');
+  assert.equal(core.calls.setOutput.resolution_path, 'referenced_workflows-API');
+});
+
+test('9. §51 missing REUSABLE_WORKFLOW_FILENAME → guard throws (fallback path only)', async () => {
+  resetEnv();
+  delete process.env.REUSABLE_WORKFLOW_FILENAME;   // force the guard
+  process.env.GITHUB_RUN_ID = '99999';
+
+  const core = makeMockCore();
+  const github = makeMockGithub({
+    referenced_workflows: [
+      {
+        path: 'undercurrentai/aegis-policy/.github/workflows/aegis-enforce.yml@3333333333333333333333333333333333333333',
+        sha: '3333333333333333333333333333333333333333',
+        ref: 'refs/heads/main',
+      },
+    ],
+  });
+  const context = makeMockContext();
+
+  await assert.rejects(
+    () => resolve(github, context, core),
+    (err) => {
+      assert.match(err.message, /REUSABLE_WORKFLOW_FILENAME env var not set/);
+      return true;
+    },
+  );
 });

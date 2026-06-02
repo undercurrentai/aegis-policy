@@ -47,8 +47,9 @@ concurrency:
 
 permissions:
   contents: read
-  checks: write         # aegis-enforce.yml posts to Checks API (cycle-2 fix: reusable workflow effective perms = INTERSECTION of caller + reusable; missing this caused startup_failure on RUN 26599831374)
-  pull-requests: write  # aegis-enforce.yml's composite-action step writes PR comments
+  checks: write   # aegis-enforce.yml posts to Checks API (cycle-2 fix: reusable effective perms = caller ∩ reusable; missing this caused startup_failure on RUN 26599831374)
+  actions: read   # §51: reusable's resolve_callee referenced_workflows API fallback (cross-repo self-checkout); intersection must include it
+  # QG48-5: pull-requests:write REMOVED — the reusable writes NO PR comments (the prior comment was factually wrong); it writes Checks API + GITHUB_OUTPUT + STEP_SUMMARY only.
 
 jobs:
   aegis-gate:  # R3 (cosmic-flute §48.15): identical job key across aegis-governance + aegis-policy
@@ -65,4 +66,6 @@ jobs:
       estimated_impact: medium
       change_type: feature
       agent_id: github-actions-aegis-policy-self-dogfood
-    secrets: inherit
+    secrets:
+      # QG48-12: pass ONLY the needed secret (NOT `secrets: inherit`).
+      AEGIS_API_KEY: ${{ secrets.AEGIS_API_KEY }}
