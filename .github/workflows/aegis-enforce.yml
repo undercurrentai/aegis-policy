@@ -29,6 +29,9 @@
 #         - run: echo "All CI checks passed"
 #
 #     aegis-gate:
+#       # Pin by commit SHA (RECOMMENDED — byte-immutable; pair with Dependabot) or @v1
+#       # (convenience moving tag, backward-compatible within v1). NEVER @main. See
+#       # docs/release-discipline.md (QG48-D5).
 #       uses: undercurrentai/aegis-policy/.github/workflows/aegis-enforce.yml@<SHA>
 #       needs: [ci-success]
 #       if: needs.ci-success.result == 'success'
