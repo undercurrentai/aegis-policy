@@ -1,17 +1,22 @@
-# AEGIS Governance Gate — Reusable GitHub Action
+# AEGIS Governance Gate — INTERNAL composite action
+#
+# ⚠️  INTERNAL IMPLEMENTATION DETAIL — do NOT consume this composite directly.
+# Consumer repos MUST use the reusable workflow as the single supported public
+# entry point:
+#     uses: undercurrentai/aegis-policy/.github/workflows/aegis-enforce.yml@<SHA>
+# The reusable workflow owns the §48 enforce-substrate CI/CD-domain default
+# profile, the Checks-API attachment, and the shadow/enforce mode plumbing. This
+# composite carries only bare-minimum defaults and is invoked ONLY by
+# aegis-enforce.yml. Calling it directly bypasses that profile — its divergent
+# defaults will produce different verdicts for the same inputs (cosmic-flute §51 /
+# QG48-D1: collapses the two-public-entry-point footgun to one entry point;
+# QG48-D2/D4/D7 likewise only bite the unsupported direct-composite path).
 #
 # Evaluates a proposal against AEGIS governance gates via the Cloud Run API.
 # Returns PROCEED / PAUSE / HALT / ESCALATE with confidence and rationale.
-#
-# Usage:
-#   - uses: undercurrentai/aegis-policy/.github/actions/aegis-gate@<SHA>
-#     with:
-#       api_key: ${{ secrets.AEGIS_API_KEY }}
-#       proposal_summary: "Deploy new authentication service"
-#       estimated_impact: "high"
 
 name: 'AEGIS Governance Gate'
-description: 'Evaluate a proposal against AEGIS governance gates via Cloud Run API'
+description: 'INTERNAL — evaluate a proposal against AEGIS gates (use the aegis-enforce.yml reusable workflow, not this composite directly)'
 
 inputs:
   api_key:
@@ -26,14 +31,22 @@ inputs:
     required: true
   estimated_impact:
     description: 'Impact level: low, medium, high, critical'
-    required: true
+    # QG48-D2: was `required: true` WITH a default (contradiction — a default
+    # makes the input effectively optional). Internal composite; the
+    # aegis-enforce.yml reusable workflow always supplies estimated_impact.
+    required: false
     default: 'medium'
   change_type:
     description: 'Change type: feature, refactor, bugfix, config'
     required: false
     default: 'feature'
   risk_score:
-    description: 'Risk score (0.0 - 1.0). Alias for risk_proposed.'
+    # QG48-D4: INTERNAL proposed-risk input. The aegis-enforce.yml reusable
+    # workflow maps its `risk_proposed` input here (`risk_score: ${{ inputs.risk_proposed }}`)
+    # and the API payload sends it as `risk_proposed`. Named `risk_score` (not
+    # `risk_proposed`) for legacy reasons — an unsupported direct-composite
+    # caller setting `risk_proposed` would be silently ignored (→ default 0.0).
+    description: 'INTERNAL proposed-risk input (0.0 - 1.0); reusable workflow maps risk_proposed here.'
     required: false
     default: '0.0'
   risk_baseline:
@@ -53,7 +66,11 @@ inputs:
     required: false
     default: '0.5'
   complexity_score:
-    description: 'Complexity score (0.0 - 1.0, higher = simpler)'
+    # QG48-D7: floor 0.5 is an IMMUTABLE hard gate (AEGIS rejects below 0.5);
+    # this default sits ON the floor, so an unsupported direct-composite caller
+    # that omits it lands at the rejection boundary. The aegis-enforce.yml
+    # reusable workflow supplies a richer default (0.75) + derivation guidance.
+    description: 'Complexity score (0.0 - 1.0, HIGHER = SIMPLER; floor 0.5 IMMUTABLE)'
     required: false
     default: '0.5'
   quality_score:
@@ -104,6 +121,14 @@ runs:
         INPUT_QUALITY_SCORE: ${{ inputs.quality_score }}
         INPUT_AGENT_ID: ${{ inputs.agent_id }}
       run: |
+        set -euo pipefail
+
+        # QG48-9: per-invocation temp file (was a fixed /tmp/aegis-response.json —
+        # concurrent jobs on a persistent self-hosted runner would race + leak
+        # cross-PR verdicts). mktemp + EXIT-trap cleanup.
+        RESPONSE_FILE=$(mktemp)
+        trap 'rm -f "${RESPONSE_FILE}"' EXIT
+
         # Build proposal payload (uses env vars to prevent script injection)
         PAYLOAD=$(python3 -c "
         import json, os
@@ -123,47 +148,75 @@ runs:
         print(json.dumps(body))
         ")
 
-        # Call AEGIS Cloud Run API
-        HTTP_CODE=$(curl -s -o /tmp/aegis-response.json -w "%{http_code}" \
+        # Call AEGIS Cloud Run API.
+        # QG48-6: --retry + --connect-timeout so a transient network blip retries
+        # instead of false-failing (shadow swallows it; enforcing would block merge).
+        # QG48-7: capture curl rc explicitly (errexit-safe) so an empty / non-200
+        # HTTP_CODE produces a clear fail-closed error, not a numeric-compare crash.
+        set +e
+        HTTP_CODE=$(curl -s -o "${RESPONSE_FILE}" -w "%{http_code}" \
           -X POST "${AEGIS_API_URL}/evaluate" \
           -H "Authorization: Bearer ${AEGIS_API_KEY}" \
           -H "Content-Type: application/json" \
           -d "${PAYLOAD}" \
-          --max-time 30)
+          --connect-timeout 10 --max-time 30 \
+          --retry 3 --retry-delay 2 --retry-connrefused)
+        CURL_RC=$?
+        set -e
 
-        if [ "${HTTP_CODE}" -ne 200 ]; then
-          echo "::error::AEGIS API returned HTTP ${HTTP_CODE}"
-          cat /tmp/aegis-response.json
+        if [ "${CURL_RC}" -ne 0 ] || [ -z "${HTTP_CODE}" ] || [ "${HTTP_CODE}" != "200" ]; then
+          echo "::error::AEGIS API call failed (curl rc=${CURL_RC}, http=${HTTP_CODE:-none})"
+          # QG48-4: redact Bearer / key-like tokens + truncate the response body
+          # before echoing to the PUBLIC-repo Actions log.
+          sed -E 's/(Bearer|Authorization|sk-|uk_)[A-Za-z0-9._-]+/[REDACTED]/gI' "${RESPONSE_FILE}" | head -c 2000 || true
+          echo ""
           exit 1
         fi
 
-        # Parse response
-        DECISION=$(cat /tmp/aegis-response.json)
+        # Parse response.
+        DECISION=$(cat "${RESPONSE_FILE}")
+        # QG48-8: fail-CLOSED on a malformed 200 — .get('status','') default +
+        # an explicit empty-status guard. A missing 'status' key would otherwise
+        # leave STATUS empty and the gate would silently pass (fail-open).
+        # (A non-JSON body makes json.load raise → set -e exits non-zero, also
+        # fail-closed.)
+        STATUS=$(printf '%s' "${DECISION}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))")
+        CONFIDENCE=$(printf '%s' "${DECISION}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('confidence', 'N/A'))")
+        RATIONALE=$(printf '%s' "${DECISION}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('rationale', 'N/A'))")
 
-        STATUS=$(echo "${DECISION}" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
-        CONFIDENCE=$(echo "${DECISION}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('confidence', 'N/A'))")
-        RATIONALE=$(echo "${DECISION}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('rationale', 'N/A'))")
+        if [ -z "${STATUS}" ]; then
+          echo "::error::AEGIS response (HTTP 200) is missing the 'status' field — malformed; fail-closed"
+          exit 1
+        fi
 
-        # Use heredoc delimiters to prevent multi-line injection in GITHUB_OUTPUT
+        # QG48-1: random per-run GITHUB_OUTPUT heredoc delimiters so untrusted
+        # rationale / decision text cannot break out of the heredoc to inject
+        # arbitrary step outputs. A 32-hex-char delimiter collision is negligible.
+        DELIM_R="AEGIS_EOF_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+        DELIM_J="AEGIS_JSON_EOF_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
         {
           echo "status=${STATUS}"
           echo "confidence=${CONFIDENCE}"
-          echo "rationale<<AEGIS_EOF"
+          echo "rationale<<${DELIM_R}"
           echo "${RATIONALE}"
-          echo "AEGIS_EOF"
-          echo "decision_json<<AEGIS_JSON_EOF"
+          echo "${DELIM_R}"
+          echo "decision_json<<${DELIM_J}"
           echo "${DECISION}"
-          echo "AEGIS_JSON_EOF"
-        } >> $GITHUB_OUTPUT
+          echo "${DELIM_J}"
+        } >> "$GITHUB_OUTPUT"
 
-        # Summary
-        echo "### AEGIS Governance Decision" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-        echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-        echo "| **Status** | \`${STATUS}\` |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Confidence** | ${CONFIDENCE} |" >> $GITHUB_STEP_SUMMARY
-        echo "| **Rationale** | ${RATIONALE} |" >> $GITHUB_STEP_SUMMARY
+        # Summary. QG48-10: collapse newlines + escape `|` in RATIONALE so it
+        # cannot break the markdown table or inject extra rows.
+        RATIONALE_MD=$(printf '%s' "${RATIONALE}" | tr '\n' ' ' | sed 's/|/\\|/g')
+        {
+          echo "### AEGIS Governance Decision"
+          echo ""
+          echo "| Field | Value |"
+          echo "|-------|-------|"
+          echo "| **Status** | \`${STATUS}\` |"
+          echo "| **Confidence** | ${CONFIDENCE} |"
+          echo "| **Rationale** | ${RATIONALE_MD} |"
+        } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Check gate result
       if: inputs.fail_on_halt == 'true'
@@ -172,7 +225,13 @@ runs:
         GATE_STATUS: ${{ steps.evaluate.outputs.status }}
         GATE_RATIONALE: ${{ steps.evaluate.outputs.rationale }}
       run: |
-        if [ "${GATE_STATUS}" = "halt" ]; then
+        set -euo pipefail
+        # QG48-3: case-insensitive HALT compare. The API may return "HALT" or
+        # "halt"; the github-script conclusionMap in aegis-enforce.yml lowercases,
+        # but this composite previously compared case-sensitively against "halt"
+        # — an upper/mixed-case HALT would slip through (fail-open) in enforcing mode.
+        GATE_STATUS_LC=$(printf '%s' "${GATE_STATUS}" | tr '[:upper:]' '[:lower:]')
+        if [ "${GATE_STATUS_LC}" = "halt" ]; then
           echo "::error::AEGIS governance gate returned HALT: ${GATE_RATIONALE}"
           exit 1
         fi
