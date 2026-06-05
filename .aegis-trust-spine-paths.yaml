@@ -1,0 +1,53 @@
+# .aegis-trust-spine-paths.yaml — §44 Phase 2 trust-spine carve-out source-of-truth
+#
+# Cosmic-flute §54 (task #271, pulled forward from Phase 3 per §54 D1). Read by
+# the `aggregator-approve` job in .github/workflows/ai-second-review.yml: a PR
+# that touches ANY path matching these globs is NEVER auto-approved by the
+# `aegis-auto-reviewer` machine-user — it requires human review + the manual
+# §34.17.2 bypass cycle.
+#
+# DEFENSE IN DEPTH (two independent layers per §54.9):
+#   1. THIS file — the aggregator script refuses to post an auto-approval when
+#      any changed file matches a trust_spine_glob (fail-closed: a parse error
+#      or unreadable file is treated as "trust-spine touched" → block).
+#   2. .github/CODEOWNERS — the machine-user `@aegis-auto-reviewer` is added
+#      ONLY to the `*` default line, NOT to any trust-spine path-specific entry.
+#      GitHub's "more-specific pattern wins" rule means the machine-user is NOT
+#      a code-owner for these paths, so its approval cannot satisfy
+#      `require_code_owner_review` on a trust-spine PR even if the script layer
+#      were bypassed. The two layers MUST stay in sync — these globs mirror the
+#      CODEOWNERS trust-spine entries exactly.
+#
+# A future Phase-3 hardening (§54.12, D7) may add suzuki-shunsuke/validate-pr-
+# review-action as a third, platform-enforced layer scoped to these same paths.
+
+version: 1
+
+# Mirror of .github/CODEOWNERS trust-spine path-specific entries (keys/, schema/,
+# policy/, .github/, docs/architecture/, scripts/). Glob form `prefix/**` — the
+# aggregator matches a changed file F as trust-spine when F == prefix OR F starts
+# with `prefix/`.
+trust_spine_globs:
+  - "keys/**"
+  - "schema/**"
+  - "policy/**"
+  - ".github/**"
+  - "docs/architecture/**"
+  - "scripts/**"
+  # Self-protection: a PR that edits THIS carve-out file is itself human-only.
+  # Without this, a PR could weaken the carve-out (remove keys/** etc.) on a
+  # top-level routine-classified file + auto-approve the weakening. Two defenses
+  # combine: (1) the aggregator reads this file from the TRUSTED base.sha (so the
+  # PR's edited version never takes effect for its own gate), and (2) this glob
+  # routes any PR touching it to human review. CODEOWNERS MUST also protect this
+  # path when @aegis-auto-reviewer is added (§44 Phase 2 #266) so the two
+  # defense layers stay mirrored.
+  - ".aegis-trust-spine-paths.yaml"
+
+# NOTE (Phase-3 consideration): top-level build/dependency files (pyproject.toml,
+# requirements*.txt, Makefile, package.json, package-lock.json) are NOT yet in the
+# carve-out — they are not in .github/CODEOWNERS today, and this file mirrors the
+# CODEOWNERS human-review boundary (keeping the two defense layers in sync per
+# §54.9). A supply-chain-adjacent dep bump is still caught by the 3-AI reviewer
+# panel + Dependabot. If those files are added to CODEOWNERS in a future hardening
+# pass, mirror them here in lockstep.

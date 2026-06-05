@@ -11,14 +11,28 @@ name: AI Second Review
 # they substitute for the missing second human reviewer + retire the §34.17.2
 # sole-keyholder bypass cycle for routine PRs.
 #
-# §44 PHASE 1 SCOPE — ADVISORY ONLY:
-#   - All 3 reviewer jobs run with `continue-on-error: true`
-#   - NO aggregator-approve job (that lands in Phase 2)
-#   - NO machine-user CODEOWNER change (Phase 2)
-#   - NO org-Ruleset modification (Phase 4)
-#   - Goal: validate verdict-parsing + secret config + Blacksmith runner
-#     availability on ~3 PRs; capture inter-model verdict-agreement rate
-#     baseline per cosmic-flute §44.17 Claude objection #2.
+# §44 PHASE 2 SCOPE — ADVISORY-SAFE AGGREGATOR (cosmic-flute §54):
+#   - All 3 reviewer jobs still run with `continue-on-error: true` (advisory).
+#   - NEW aggregator-approve job: computes the auto-approve decision from the
+#     3 reviewer verdicts + Max Concern (machine) tokens (the conservative
+#     single-dimension realization of the §54.5 finding-class-agreement gate)
+#     + the trust-spine carve-out (.aegis-trust-spine-paths.yaml, read from the
+#     TRUSTED base.sha — a PR cannot shrink it to escape the gate) + the
+#     change_class != aegis-self-tune check. When the @aegis-auto-reviewer
+#     machine-user PAT (secret AEGIS_AUTO_REVIEWER_PAT) is present, it posts a
+#     BINDING code-owner APPROVE review on routine PRs that pass the gate —
+#     retiring the §34.17.2 sole-keyholder bypass cycle for routine aegis-policy
+#     PRs. ADVISORY-SAFE: when the PAT secret is absent (#263-264 not yet
+#     shipped) the decision is computed + audited but no approval is posted.
+#   - Phase-2 safe-subset: signals 1-2-3 (the 3 AI verdicts) + trust-spine
+#     carve-out + change_class. DEFERRED to Phase 3: signal 5 (AEGIS Stage-2
+#     PROCEED decision_json parse — task #268) + signal 4 (AFA gate-check, after
+#     App install). Deferred signals are conjunctive AND terms → adding them
+#     later only TIGHTENS auto-approve eligibility (monotonic; no regression).
+#   - CODEOWNER add (@aegis-auto-reviewer, #266) + org-Ruleset required-check
+#     additions (Phase 4) are NOT in this workflow file.
+#   - The §44 Phase-2 enabling PR (this change) merges via the 32nd + FINAL
+#     manual §34.17.2 bypass cycle; subsequent routine PRs need no cycle.
 #
 # Mechanism: when a pull request touches any path in the `paths:` filter
 # below, three parallel jobs run against the PR diff:
@@ -79,8 +93,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
-      # aegis-policy structural-protected paths per cosmic-flute §44.4 +
-      # existing .github/CODEOWNERS entries
+      # aegis-policy structural-protected (trust-spine) paths per cosmic-flute
+      # §44.4 + existing .github/CODEOWNERS entries. Touching ANY of these routes
+      # a PR to human review via the .aegis-trust-spine-paths.yaml carve-out
+      # (the aggregator never auto-approves a trust-spine change).
       - "keys/**"
       - "schema/**"
       - "policy/**"
@@ -89,6 +105,18 @@ on:
       - "docs/architecture/adr/**"
       - "scripts/check_*.py"
       - "scripts/_verify_local_vendored.py"
+      # Routine paths (cosmic-flute §54.3 broaden-trigger decision): non-trust-
+      # spine surfaces the §44 aggregator CAN auto-approve. WITHOUT these, a
+      # routine PR (README/CHANGELOG/docs/tests) would never trigger the
+      # workflow → no reviewer verdicts → nothing to auto-approve → every routine
+      # PR would still need the manual §34.17.2 bypass cycle (the whole point of
+      # §44 Phase 2 is to retire that for routine PRs). docs/** subsumes the
+      # trust-spine docs/architecture/adr/** above (harmless overlap); the
+      # carve-out still routes docs/architecture/** to human review.
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
+      - "tests/**"
 
 permissions:
   contents: read
@@ -129,6 +157,13 @@ env:
   # from pr_diff.patch. Git pathspec engine matches deletions because it
   # walks the diff index, not the working tree. The quotes around 'scripts/check_*.py'
   # in the git diff invocation below prevent shell expansion.
+  # The diff/review SURFACE — what the 3 reviewers actually look at. Broadened
+  # in lockstep with the trigger `paths:` (cosmic-flute §54.3) to include the
+  # routine paths so routine PRs produce a non-empty diff → real reviewer
+  # verdicts → the aggregator can auto-approve. This is DISTINCT from the
+  # trust-spine carve-out (.aegis-trust-spine-paths.yaml), which is the SUBSET
+  # that BLOCKS auto-approve; the review surface is broader than the carve-out.
+  # docs/ subsumes docs/architecture/adr/ (harmless git-pathspec overlap).
   GATED_PATHS: >-
     keys/
     schema/
@@ -138,6 +173,10 @@ env:
     docs/architecture/adr/
     scripts/check_*.py
     scripts/_verify_local_vendored.py
+    README.md
+    CHANGELOG.md
+    docs/
+    tests/
 
 jobs:
   gpt-review:
@@ -161,6 +200,14 @@ jobs:
       github.event.pull_request.head.repo.fork == false ||
       github.event.pull_request.head.repo.full_name == github.repository ||
       github.event.pull_request.head.repo == null
+    # §44 Phase 2 (cosmic-flute §54): expose verdict + Max Concern token + diff_empty
+    # as job outputs so the aggregator-approve job can compute the auto-approve
+    # decision via needs.gpt-review.outputs.*. Empty string = absent/unparseable
+    # (the aggregator treats absent as BLOCK per §54.5 rule 1).
+    outputs:
+      verdict: ${{ steps.extract.outputs.verdict }}
+      max_concern: ${{ steps.extract.outputs.max_concern }}
+      diff_empty: ${{ steps.diff.outputs.diff_empty }}
     steps:
       # === DUAL-CHECKOUT BASE/HEAD per cosmic-flute §45.12.5.1 ===
       # BASE workspace (trusted): scripts + prompts execute from here.
@@ -313,6 +360,44 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Extract outputs (verdict + Max Concern) — §44 Phase 2
+        # Parse the verdict + Max Concern (machine) tokens from the review file
+        # into job outputs for the aggregator-approve job (cosmic-flute §54).
+        # Separate from the "Enforce verdict" step (which produces the advisory
+        # red status) — this step ONLY sets outputs + NEVER fails the job, so a
+        # parse miss degrades to absent (= aggregator BLOCK per §54.5 rule 1)
+        # rather than masking the advisory status.
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        id: extract
+        env:
+          REVIEW_FILE: gpt_review.md
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const file = process.env.REVIEW_FILE;
+            let verdict = '', maxConcern = '';
+            if (fs.existsSync(file)) {
+              const lines = fs.readFileSync(file, 'utf8').split('\n');
+              // First single-token line after a "## <Heading>" line; '' if absent.
+              const parseAfter = (headingRe) => {
+                let inSection = false;
+                for (const line of lines) {
+                  if (headingRe.test(line)) { inSection = true; continue; }
+                  if (inSection && /^##/.test(line)) break;
+                  if (inSection && line.trim()) {
+                    return line.replace(/[`*]/g, '').trim().split(/\s+/)[0].toUpperCase();
+                  }
+                }
+                return '';
+              };
+              verdict = parseAfter(/^## *Verdict\b/i);
+              maxConcern = parseAfter(/^## *Max Concern\b/i);
+            }
+            core.info(`gpt-5.4-pro: verdict=${verdict || '<absent>'} max_concern=${maxConcern || '<absent>'}`);
+            core.setOutput('verdict', verdict);
+            core.setOutput('max_concern', maxConcern);
+
       - name: Stale-SHA guard (G2-residual — cosmic-flute §45.12.5.5)
         # Defense-in-depth atop concurrency cancellation (which handles the
         # common case where a newer push cancels the older run before it
@@ -440,6 +525,12 @@ jobs:
       github.event.pull_request.head.repo.fork == false ||
       github.event.pull_request.head.repo.full_name == github.repository ||
       github.event.pull_request.head.repo == null
+    # §44 Phase 2 (cosmic-flute §54): job outputs for aggregator-approve.
+    # Symmetric with gpt-review — see that job's outputs block for rationale.
+    outputs:
+      verdict: ${{ steps.extract.outputs.verdict }}
+      max_concern: ${{ steps.extract.outputs.max_concern }}
+      diff_empty: ${{ steps.diff.outputs.diff_empty }}
     steps:
       # === DUAL-CHECKOUT BASE/HEAD per cosmic-flute §45.12.5.1 ===
       # Same pattern as gpt-review — see that job for full rationale.
@@ -565,6 +656,40 @@ jobs:
               printf '_Codex review produced no output (check logs)._\n'
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Extract outputs (verdict + Max Concern) — §44 Phase 2
+        # Symmetric with gpt-review's extract step (cosmic-flute §54). Sets job
+        # outputs for aggregator-approve; never fails the job (parse miss →
+        # absent → aggregator BLOCK per §54.5 rule 1).
+        if: always() && steps.diff.outputs.diff_empty != 'true'
+        id: extract
+        env:
+          REVIEW_FILE: codex_review.md
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const fs = require('fs');
+            const file = process.env.REVIEW_FILE;
+            let verdict = '', maxConcern = '';
+            if (fs.existsSync(file)) {
+              const lines = fs.readFileSync(file, 'utf8').split('\n');
+              const parseAfter = (headingRe) => {
+                let inSection = false;
+                for (const line of lines) {
+                  if (headingRe.test(line)) { inSection = true; continue; }
+                  if (inSection && /^##/.test(line)) break;
+                  if (inSection && line.trim()) {
+                    return line.replace(/[`*]/g, '').trim().split(/\s+/)[0].toUpperCase();
+                  }
+                }
+                return '';
+              };
+              verdict = parseAfter(/^## *Verdict\b/i);
+              maxConcern = parseAfter(/^## *Max Concern\b/i);
+            }
+            core.info(`Codex: verdict=${verdict || '<absent>'} max_concern=${maxConcern || '<absent>'}`);
+            core.setOutput('verdict', verdict);
+            core.setOutput('max_concern', maxConcern);
 
       - name: Stale-SHA guard (G2-residual — cosmic-flute §45.12.5.5)
         # Defense-in-depth atop concurrency cancellation (which handles the
@@ -695,6 +820,13 @@ jobs:
       github.event.pull_request.head.repo.fork == false ||
       github.event.pull_request.head.repo.full_name == github.repository ||
       github.event.pull_request.head.repo == null
+    # §44 Phase 2 (cosmic-flute §54): job outputs for aggregator-approve. The
+    # verdict + max_concern come from the artifact-extract step (id: verdict)
+    # which already parses claude_review.md; Max Concern parsing is added there.
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+      max_concern: ${{ steps.verdict.outputs.max_concern }}
+      diff_empty: ${{ steps.diff.outputs.diff_empty }}
     steps:
       # === DUAL-CHECKOUT BASE/HEAD per cosmic-flute §45.12.5.1 ===
       # Symmetric with gpt-review + codex-review. Compute-diff added in C1 so
@@ -788,6 +920,17 @@ jobs:
             and include these sections in order:
             ## Verdict
             One of: APPROVE, REQUEST_CHANGES, COMMENT.
+            ## Max Concern (machine)
+            Exactly ONE token on its own line — the MAXIMUM severity across ALL
+            your concerns (blocking + non-blocking): one of NONE, LOW, MEDIUM,
+            HIGH, CRITICAL. No prose, no backticks. NONE only if zero concerns.
+            This machine-readable token feeds the cosmic-flute §44 aggregator
+            auto-approve gate (substitutes for the missing second human reviewer
+            on routine PRs) — be accurate; when uncertain round UP (fail-safe:
+            a higher token blocks auto-approve + routes to human). CRITICAL =
+            trust-spine break / secret leak / injection; HIGH = incorrect-by-
+            default / broken invariant; MEDIUM = missing validation / resource
+            leak / silent fallback; LOW = style / docs / nit.
             ## Blocking concerns
             Bulleted list with file:line evidence. _None._ if APPROVE/COMMENT.
             ## Non-blocking observations
@@ -896,8 +1039,25 @@ jobs:
               }
             }
 
-            core.info(`Claude verdict (from artifact): ${verdict}`);
+            // §44 Phase 2 (cosmic-flute §54): parse the Max Concern (machine)
+            // token for the aggregator-approve gate. First single-token line
+            // after the "## Max Concern" heading; '' if absent (→ aggregator
+            // BLOCK per §54.5 rule 1, fail-closed). Distinct heading from
+            // "## Verdict" so the verdict-count guard above is unaffected.
+            let inConcern = false;
+            let maxConcern = '';
+            for (const line of lines) {
+              if (/^## *Max Concern\b/i.test(line)) { inConcern = true; continue; }
+              if (inConcern && /^##/.test(line)) break;
+              if (inConcern && line.trim()) {
+                maxConcern = line.replace(/[`*]/g, '').trim().split(/\s+/)[0].toUpperCase();
+                break;
+              }
+            }
+
+            core.info(`Claude verdict (from artifact): ${verdict}; max_concern: ${maxConcern || '<absent>'}`);
             core.setOutput('verdict', verdict);
+            core.setOutput('max_concern', maxConcern);
 
             // Write review to job summary
             const summaryHeader = '## 🤖 Claude Opus 4.6 — Second-Reviewer Gate (§44 Phase 1 Pilot)';
@@ -970,3 +1130,331 @@ jobs:
               exit 1
               ;;
           esac
+
+  # =====================================================================
+  # §44 Phase 2 aggregator-approve (cosmic-flute §54)
+  # =====================================================================
+  # Computes the auto-approve decision from the 3 reviewer verdicts + Max
+  # Concern (machine) tokens (§54.5 finding-class-agreement, single-dimension
+  # realization) + the trust-spine carve-out (read from the TRUSTED base.sha)
+  # + the change_class != aegis-self-tune check. When the @aegis-auto-reviewer
+  # machine-user PAT (secret AEGIS_AUTO_REVIEWER_PAT) is present, posts a
+  # BINDING code-owner APPROVE review on routine PRs that pass the gate,
+  # retiring the §34.17.2 sole-keyholder bypass cycle for routine PRs.
+  #
+  # ADVISORY-SAFE: when the PAT secret is absent (machine-user / PAT not yet
+  # shipped — §44 Phase 2 #262-264) the decision is computed + audited but NO
+  # approval is posted. So this job is harmless to ship before the org-side
+  # machine-user exists.
+  #
+  # CHECKOUT-FREE by design: this job runs NO checkout + executes NO PR-head
+  # code. The carve-out is fetched via the GitHub API at the immutable base.sha
+  # (a PR cannot shrink the carve-out to escape its own gate); the changed-file
+  # list comes from pulls.listFiles; the verdicts come from needs.*.outputs.
+  # Trigger stays `on: pull_request` (NOT pull_request_target) per §54 D4 +
+  # §44.20.4 — no "pwn request" surface.
+  aggregator-approve:
+    name: AI Second Review / Aggregator (auto-approve gate)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    needs: [gpt-review, codex-review, claude-review]
+    # always() so the aggregator runs even if a reviewer job was cancelled
+    # (in which case its outputs are absent → aggregator BLOCKs, fail-closed).
+    # Same fork-guard as the reviewer jobs.
+    if: >-
+      always() &&
+      ( github.event.pull_request.head.repo.fork == false ||
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        github.event.pull_request.head.repo == null )
+    permissions:
+      contents: read
+      pull-requests: write   # post the binding APPROVE review (via PAT when present)
+    env:
+      # Expression renders the BOOLEAN result (true|false), never the secret
+      # value — safe to use in a step `if:` without leaking the PAT.
+      HAS_PAT: ${{ secrets.AEGIS_AUTO_REVIEWER_PAT != '' }}
+    steps:
+      - name: Gate decision (read-only — computes approve|block|skip)
+        id: gate
+        env:
+          GPT_VERDICT: ${{ needs.gpt-review.outputs.verdict }}
+          GPT_CONCERN: ${{ needs.gpt-review.outputs.max_concern }}
+          GPT_EMPTY: ${{ needs.gpt-review.outputs.diff_empty }}
+          GPT_RESULT: ${{ needs.gpt-review.result }}
+          CODEX_VERDICT: ${{ needs.codex-review.outputs.verdict }}
+          CODEX_CONCERN: ${{ needs.codex-review.outputs.max_concern }}
+          CODEX_EMPTY: ${{ needs.codex-review.outputs.diff_empty }}
+          CODEX_RESULT: ${{ needs.codex-review.result }}
+          CLAUDE_VERDICT: ${{ needs.claude-review.outputs.verdict }}
+          CLAUDE_CONCERN: ${{ needs.claude-review.outputs.max_concern }}
+          CLAUDE_EMPTY: ${{ needs.claude-review.outputs.diff_empty }}
+          CLAUDE_RESULT: ${{ needs.claude-review.result }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+
+            // ---- helpers -------------------------------------------------
+            const reviewers = [
+              { name: 'gpt-5.4-pro', verdict: (process.env.GPT_VERDICT || '').toUpperCase(),
+                concern: (process.env.GPT_CONCERN || '').toUpperCase(),
+                empty: process.env.GPT_EMPTY === 'true', result: process.env.GPT_RESULT },
+              { name: 'Codex', verdict: (process.env.CODEX_VERDICT || '').toUpperCase(),
+                concern: (process.env.CODEX_CONCERN || '').toUpperCase(),
+                empty: process.env.CODEX_EMPTY === 'true', result: process.env.CODEX_RESULT },
+              { name: 'Claude', verdict: (process.env.CLAUDE_VERDICT || '').toUpperCase(),
+                concern: (process.env.CLAUDE_CONCERN || '').toUpperCase(),
+                empty: process.env.CLAUDE_EMPTY === 'true', result: process.env.CLAUDE_RESULT },
+            ];
+            const KNOWN_CONCERN = new Set(['NONE', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
+            const PASS_VERDICT = new Set(['APPROVE', 'COMMENT']);
+
+            const decide = (decision, reason) => {
+              core.setOutput('decision', decision);
+              core.setOutput('reason', reason);
+              core.info(`Aggregator decision: ${decision.toUpperCase()} — ${reason}`);
+              return decision;
+            };
+
+            // §54.5 rule 0: no signal (empty gated diff) → SKIP. The workflow
+            // triggered on a path match but the GATED_PATHS diff is empty (e.g.,
+            // a merge commit). Nothing reviewed → no auto-approval; the PR takes
+            // the normal review path. Not a block (nothing is wrong) — just no
+            // auto-approve to offer.
+            if (reviewers.some((r) => r.empty)) {
+              return decide('skip', 'empty gated diff — no reviewable surface');
+            }
+
+            // §54.5 rule 1: ABSENT → BLOCK. Any reviewer that did not finish
+            // cleanly (cancelled / errored / unparseable verdict) → fail-closed.
+            // Covers the Claude first-PR-skip degradation (verdict ABSENT).
+            for (const r of reviewers) {
+              if (r.result !== 'success' || !r.verdict) {
+                return decide('block',
+                  `reviewer ${r.name} absent (result=${r.result || '?'}, verdict=${r.verdict || '<empty>'}) — fail-closed`);
+              }
+            }
+
+            // ---- trust-spine carve-out (read from TRUSTED base.sha) -------
+            // A PR cannot shrink the carve-out to escape its own gate because we
+            // read the BASE-ref version, never the PR-head version. If the file
+            // is missing/unreadable/unparseable → fail-closed BLOCK (per the
+            // .aegis-trust-spine-paths.yaml header contract).
+            let globs;
+            try {
+              const res = await github.rest.repos.getContent({
+                owner, repo, path: '.aegis-trust-spine-paths.yaml', ref: process.env.PR_BASE_SHA,
+              });
+              const content = Buffer.from(res.data.content, res.data.encoding || 'base64').toString('utf8');
+              globs = [];
+              let inBlock = false;
+              for (const raw of content.split('\n')) {
+                if (/^trust_spine_globs\s*:/.test(raw)) { inBlock = true; continue; }
+                if (!inBlock) continue;
+                if (/^\s*#/.test(raw)) continue;        // comment line (any indent)
+                if (/^\s*$/.test(raw)) continue;        // blank line
+                const m = raw.match(/^\s+-\s+(.+?)\s*$/);
+                if (m) { globs.push(m[1].trim().replace(/^["']/, '').replace(/["']$/, '')); continue; }
+                if (/^\S/.test(raw)) break;             // next top-level key ends the block
+              }
+              if (globs.length === 0) throw new Error('no trust_spine_globs parsed');
+            } catch (e) {
+              return decide('block',
+                `trust-spine carve-out unreadable at base.sha (${e.message}) — fail-closed`);
+            }
+
+            // Deliberately-simple glob subset matching the carve-out vocabulary
+            // (prefix/**, prefix/*, prefix*, exact). Unknown patterns → no match
+            // here, but an unparseable FILE already fail-closed above.
+            const matchesGlob = (file, glob) => {
+              if (glob.endsWith('/**')) { const p = glob.slice(0, -3); return file === p || file.startsWith(p + '/'); }
+              if (glob.endsWith('/*'))  { const p = glob.slice(0, -2); return file.startsWith(p + '/') && !file.slice(p.length + 1).includes('/'); }
+              if (glob.endsWith('*'))   { return file.startsWith(glob.slice(0, -1)); }
+              return file === glob;
+            };
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: prNumber, per_page: 100,
+            });
+            const changed = files.map((f) => f.filename);
+            const trustSpineHit = changed.find((f) => globs.some((g) => matchesGlob(f, g)));
+            if (trustSpineHit) {
+              return decide('block',
+                `trust-spine path touched (${trustSpineHit}) — human-only per §44.4 carve-out`);
+            }
+
+            // §54.3 D-lock: change_class != aegis-self-tune. Signal sources:
+            // PR label `aegis-self-tune`, a `change_class: aegis-self-tune`
+            // footer in the body, or `[aegis-self-tune]` in the title. (For
+            // aegis-policy a self-tune change is trust-spine by nature, so the
+            // carve-out above usually catches it first; this is the second
+            // layer for any self-tune change outside carve-out paths. Phase 3
+            // adds the AEGIS Stage-2 change_type signal — #268.)
+            let labels = [];
+            try { labels = JSON.parse(process.env.PR_LABELS || '[]'); } catch { labels = []; }
+            const body = process.env.PR_BODY || '';
+            const title = process.env.PR_TITLE || '';
+            const selfTune =
+              labels.some((l) => String(l).toLowerCase() === 'aegis-self-tune') ||
+              /change_class\s*:\s*aegis-self-tune/i.test(body) ||
+              /\[aegis-self-tune\]/i.test(title);
+            if (selfTune) {
+              return decide('block', 'change_class == aegis-self-tune — human-only per §28.5');
+            }
+
+            // ---- verdict / Max Concern gate (§54.5 rules 2-7) ------------
+            // Normalize unknown concern tokens to HIGH (fail-closed; §54.5
+            // "unparseable severity → HIGH×C3").
+            const norm = reviewers.map((r) => ({
+              ...r, concern: KNOWN_CONCERN.has(r.concern) ? r.concern : 'HIGH',
+            }));
+
+            // §54.5 rule 2: any HIGH/CRITICAL Max Concern → BLOCK (stricter than
+            // the verdict word; a model flagging HIGH blocks regardless of its
+            // verdict). Also catches normalized-unknown concerns.
+            const sev = norm.find((r) => r.concern === 'HIGH' || r.concern === 'CRITICAL');
+            if (sev) {
+              return decide('block', `${sev.name} Max Concern = ${sev.concern} — human-only`);
+            }
+
+            // §54.5 rules 3-4: corroborated dissent → BLOCK (≥2 REQUEST_CHANGES).
+            const rcCount = norm.filter((r) => r.verdict === 'REQUEST_CHANGES').length;
+            if (rcCount >= 2) {
+              return decide('block', `${rcCount} reviewers REQUEST_CHANGES — corroborated dissent`);
+            }
+
+            // §54.5 rule 5: all verdicts APPROVE/COMMENT (+ all concerns ≤ MEDIUM,
+            // already guaranteed by rule 2) → APPROVE.
+            if (norm.every((r) => PASS_VERDICT.has(r.verdict))) {
+              return decide('approve', 'all 3 verdicts APPROVE/COMMENT; max concern ≤ MEDIUM');
+            }
+
+            // §54.5 rule 6: exactly 1 REQUEST_CHANGES, the other 2 APPROVE/COMMENT,
+            // and (guaranteed by rule 2) the dissenter's concern ≤ MEDIUM → APPROVE
+            // (lone low-severity dissent = run-to-run non-determinism noise per
+            // §44.20.10.3).
+            if (rcCount === 1 && norm.filter((r) => PASS_VERDICT.has(r.verdict)).length === 2) {
+              const dissenter = norm.find((r) => r.verdict === 'REQUEST_CHANGES');
+              return decide('approve',
+                `lone low-severity dissent (${dissenter.name} REQUEST_CHANGES @ ${dissenter.concern} ≤ MEDIUM) — treated as noise`);
+            }
+
+            // §54.5 rule 7: default → BLOCK.
+            return decide('block',
+              `no auto-approve rule matched (verdicts: ${norm.map((r) => `${r.name}=${r.verdict}/${r.concern}`).join(', ')}) — fail-closed`);
+
+      - name: Post binding APPROVE (PAT-gated; advisory-safe when secret absent)
+        # Only fires when the gate says approve AND the machine-user PAT exists.
+        # When HAS_PAT is false (PAT not yet shipped — §44 Phase 2 #262-264),
+        # this step is skipped → the workflow is harmless to ship early.
+        if: steps.gate.outputs.decision == 'approve' && env.HAS_PAT == 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GATE_REASON: ${{ steps.gate.outputs.reason }}
+          GPT_VERDICT: ${{ needs.gpt-review.outputs.verdict }}
+          GPT_CONCERN: ${{ needs.gpt-review.outputs.max_concern }}
+          CODEX_VERDICT: ${{ needs.codex-review.outputs.verdict }}
+          CODEX_CONCERN: ${{ needs.codex-review.outputs.max_concern }}
+          CLAUDE_VERDICT: ${{ needs.claude-review.outputs.verdict }}
+          CLAUDE_CONCERN: ${{ needs.claude-review.outputs.max_concern }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          # The machine-user PAT (NOT the workflow GITHUB_TOKEN — GitHub
+          # platform-blocks GITHUB_TOKEN from approving PRs). A PAT-authored
+          # code-owner review counts toward required_approving_review_count +
+          # require_code_owner_review (machine-user added to CODEOWNERS in #266)
+          # + require_last_push_approval (machine-user ≠ Josh the author).
+          github-token: ${{ secrets.AEGIS_AUTO_REVIEWER_PAT }}
+          script: |
+            const { owner, repo } = context.repo;
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const reviewedSha = process.env.PR_HEAD_SHA;
+
+            // TOCTOU: re-GET current head SHA; never approve a SHA nobody
+            // reviewed. (dismiss_stale_reviews_on_push:true on 16294975 would
+            // also auto-dismiss on push, but this is belt-and-suspenders.)
+            const pr = await github.rest.pulls.get({ owner, repo, pull_number: prNumber });
+            if (pr.data.head.sha !== reviewedSha) {
+              core.warning(
+                `Head SHA drifted (${reviewedSha} → ${pr.data.head.sha}) since review — NOT approving; ` +
+                'a fresh run on the new SHA will re-evaluate.');
+              return;
+            }
+
+            const body =
+              '<!-- ai-second-review:aggregator-approve -->\n' +
+              `<!-- run-id:${process.env.GITHUB_RUN_ID} head-sha:${reviewedSha} -->\n\n` +
+              '## ✅ Auto-approved by @aegis-auto-reviewer (cosmic-flute §44 Phase 2)\n\n' +
+              `**Gate**: ${process.env.GATE_REASON}\n\n` +
+              '| Reviewer | Verdict | Max Concern |\n|---|---|---|\n' +
+              `| gpt-5.4-pro | ${process.env.GPT_VERDICT} | ${process.env.GPT_CONCERN} |\n` +
+              `| Codex | ${process.env.CODEX_VERDICT} | ${process.env.CODEX_CONCERN} |\n` +
+              `| Claude | ${process.env.CLAUDE_VERDICT} | ${process.env.CLAUDE_CONCERN} |\n\n` +
+              'Binding code-owner approval substituting for the missing second human reviewer on a routine PR ' +
+              '(non-trust-spine, non-self-tune, 3-AI consensus). Trust-spine + self-tune + AEGIS-escalated PRs ' +
+              'remain human-only. Accountable human reviewer: @ThermoclineLeviathan.';
+
+            await github.rest.pulls.createReview({
+              owner, repo, pull_number: prNumber,
+              event: 'APPROVE',
+              commit_id: reviewedSha,   // pin the approval to the reviewed commit
+              body,
+            });
+            core.info(`Posted binding APPROVE on PR #${prNumber} @ ${reviewedSha}`);
+
+      - name: Audit log (always — every PR records its gate decision)
+        if: always()
+        env:
+          DECISION: ${{ steps.gate.outputs.decision }}
+          REASON: ${{ steps.gate.outputs.reason }}
+          HAS_PAT: ${{ env.HAS_PAT }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GPT_VERDICT: ${{ needs.gpt-review.outputs.verdict }}
+          GPT_CONCERN: ${{ needs.gpt-review.outputs.max_concern }}
+          CODEX_VERDICT: ${{ needs.codex-review.outputs.verdict }}
+          CODEX_CONCERN: ${{ needs.codex-review.outputs.max_concern }}
+          CLAUDE_VERDICT: ${{ needs.claude-review.outputs.verdict }}
+          CLAUDE_CONCERN: ${{ needs.claude-review.outputs.max_concern }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const decision = process.env.DECISION || 'block';
+            const reason = process.env.REASON || '(gate step did not run)';
+            const hasPat = process.env.HAS_PAT === 'true';
+            const posted = decision === 'approve'
+              ? (hasPat ? '✅ binding APPROVE posted by @aegis-auto-reviewer'
+                        : '⚠️ would auto-approve, but PAT secret absent (advisory only — #263-264 not yet shipped)')
+              : (decision === 'skip' ? '⏭️ no action (empty gated diff)'
+                                     : '🔒 routed to human review');
+            const icon = decision === 'approve' ? '✅' : decision === 'skip' ? '⏭️' : '🔒';
+            const marker = '<!-- ai-second-review:aggregator -->';
+            const body =
+              `${marker}\n\n## ${icon} §44 Aggregator — auto-approve gate: \`${decision.toUpperCase()}\`\n\n` +
+              `**Reason**: ${reason}\n\n**Action**: ${posted}\n\n` +
+              `**Reviewed head**: \`${(process.env.PR_HEAD_SHA || '').slice(0, 12)}\`\n\n` +
+              '| Reviewer | Verdict | Max Concern |\n|---|---|---|\n' +
+              `| gpt-5.4-pro | ${process.env.GPT_VERDICT || '—'} | ${process.env.GPT_CONCERN || '—'} |\n` +
+              `| Codex | ${process.env.CODEX_VERDICT || '—'} | ${process.env.CODEX_CONCERN || '—'} |\n` +
+              `| Claude | ${process.env.CLAUDE_VERDICT || '—'} | ${process.env.CLAUDE_CONCERN || '—'} |\n\n` +
+              '---\n*cosmic-flute §44 Phase 2 (§54). Gate: 3-AI finding-class-agreement + trust-spine carve-out ' +
+              '(read from base.sha) + change_class != aegis-self-tune. Signals 4 (AFA) + 5 (AEGIS PROCEED) ' +
+              'are conjunctive AND terms deferred to Phase 3 (#268). Accountable human: @ThermoclineLeviathan.*';
+            await core.summary.addRaw(body).write();
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100,
+            });
+            const existing = comments.find((c) => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

@@ -260,6 +260,19 @@ Use `APPROVE` only if you have high confidence the change is correct. Use
 `REQUEST_CHANGES` if you found a blocking concern. Use `COMMENT` if the
 diff is trivial or if you want to flag observations without blocking.
 
+## Max Concern (machine)
+
+Exactly ONE token on its own line — the MAXIMUM severity across ALL your
+concerns (blocking + non-blocking): one of NONE, LOW, MEDIUM, HIGH, CRITICAL.
+No prose, no backticks, no prefix. NONE only if you have zero concerns. This
+machine-readable token feeds the cosmic-flute §44 aggregator auto-approve gate
+(it substitutes for the missing second human reviewer on routine PRs) — be
+accurate, and when uncertain round UP (fail-safe: a higher token blocks
+auto-approve + routes to human review). Severity guide: CRITICAL = trust-spine
+break / secret leak / injection; HIGH = incorrect-by-default behavior / broken
+invariant; MEDIUM = missing validation / resource leak / silent fallback;
+LOW = style / docs / nit.
+
 ## Blocking concerns
 
 Bulleted list. Empty or "_None._" if Verdict is APPROVE or COMMENT.
@@ -438,6 +451,10 @@ def _fallback_markdown(reason: str) -> str:
     return (
         "## Verdict\n\n"
         "REQUEST_CHANGES\n\n"
+        # Max Concern = HIGH on fallback so the §44 aggregator gate blocks
+        # auto-approve (rule: any HIGH/CRITICAL → block + route to human).
+        "## Max Concern (machine)\n\n"
+        "HIGH\n\n"
         "## Blocking concerns\n\n"
         "- Review execution failed before a verdict could be produced (fail-closed).\n"
         f"- Reason: {reason}\n\n"
