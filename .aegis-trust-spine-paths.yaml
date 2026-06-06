@@ -34,6 +34,11 @@ trust_spine_globs:
   - ".github/**"
   - "docs/architecture/**"
   - "scripts/**"
+  # Verifier-kit composite Action — the externally-consumed verify-aegis-attestation
+  # composite that pins the canonical signing keys + policy/verifier-policy-v1.yaml and
+  # runs the offline attestation verification. Trust-spine material (QG-§54 audit:
+  # closes the actions/ fall-through that BOTH layers previously missed).
+  - "actions/**"
   # Self-protection: a PR that edits THIS carve-out file is itself human-only.
   # Without this, a PR could weaken the carve-out (remove keys/** etc.) on a
   # top-level routine-classified file + auto-approve the weakening. Two defenses
@@ -44,10 +49,45 @@ trust_spine_globs:
   # defense layers stay mirrored.
   - ".aegis-trust-spine-paths.yaml"
 
-# NOTE (Phase-3 consideration): top-level build/dependency files (pyproject.toml,
-# requirements*.txt, Makefile, package.json, package-lock.json) are NOT yet in the
-# carve-out — they are not in .github/CODEOWNERS today, and this file mirrors the
-# CODEOWNERS human-review boundary (keeping the two defense layers in sync per
-# §54.9). A supply-chain-adjacent dep bump is still caught by the 3-AI reviewer
-# panel + Dependabot. If those files are added to CODEOWNERS in a future hardening
-# pass, mirror them here in lockstep.
+  # Supply-chain dep files (cosmic-flute §54 Q2: close the residual auto-approve
+  # gap; mirrored in .github/CODEOWNERS as human-only `/`-anchored lines). Bare
+  # filenames — the aggregator matchesGlob() falls through to `file === glob` for a
+  # no-wildcard entry, matching the repo-root file exactly. requirements-dev.txt
+  # exists today; the rest are a forward-proof superset (a glob for an absent file
+  # never fires until that file is created — harmless).
+  - "requirements-dev.txt"
+  - "requirements.txt"
+  - "pyproject.toml"
+  - "Makefile"
+  - "package.json"
+  - "package-lock.json"
+  # Uncommon Python build/dep manifests — forward-proof superset (QG-§54 audit
+  # LOW: none exist today; harmless globs that never fire until the file is created).
+  - "setup.py"
+  - "setup.cfg"
+  - "Pipfile"
+  - "poetry.lock"
+  - "tox.ini"
+
+  # Root CI / governance config (QG-§54 audit MEDIUM: close the root-config
+  # fall-through). .gitignore is a plausible secret-un-ignore vector; .afa.yaml is
+  # AFA gate-check config; .markdownlint.json tunes a CI lint. Bare filenames →
+  # matchesGlob file===glob exact match. Mirrored in .github/CODEOWNERS.
+  - ".gitignore"
+  - ".afa.yaml"
+  - ".markdownlint.json"
+
+# NOTE: as of cosmic-flute §54 Q2 + the QG-§54 adversarial audit, the carve-out
+# covers: the 6 trust-spine dirs (keys/, schema/, policy/, .github/, docs/architecture/,
+# scripts/) + the verifier-kit composite (actions/**) + this self-protection file +
+# the supply-chain dep/build manifests + root CI/governance config (.gitignore,
+# .afa.yaml, .markdownlint.json) — each mirrored as a human-only entry in
+# .github/CODEOWNERS, keeping the two defense layers in lockstep per §54.9.
+#
+# DELIBERATE risk-acceptance (QG-§54 audit LOW, documented not closed): non-ADR docs
+# under docs/ (governance.md, release-discipline.md, key-rotation-runbook.md, roadmap.md)
+# remain ROUTINE (auto-approvable). Rationale: they are documentation (not executable
+# trust-material), are reviewed by the 3-AI consensus panel, CODEOWNERS cannot express
+# "docs/** except roadmap.md" (no negation), and docs/roadmap.md MUST stay routine for
+# the §44 Phase-2 #267 validation. docs/architecture/ (the ADR canonical record) stays
+# human-only. A future hardening may enumerate specific governance docs if warranted.
