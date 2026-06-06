@@ -8,8 +8,13 @@
 # replace `@ThermoclineLeviathan` with `@undercurrentai/security-reviewers`
 # (2-of-N team) and require 2 reviewers on `keys/`, `schema/`, `policy/` paths.
 
-# Default — every change requires owner approval
-*                                  @ThermoclineLeviathan
+# Default — routine (non-trust-spine, non-dep-file) changes may be code-owner-
+# approved by the §44 Phase 2 machine-user @aegis-auto-reviewer (3-AI consensus
+# auto-approve via .github/workflows/ai-second-review.yml aggregator-approve job;
+# cosmic-flute §54). Last-match-wins: @aegis-auto-reviewer is on the `*` line ONLY
+# and is EXCLUDED from every trust-spine + carve-out + dep-file entry below, so
+# those PRs still require @ThermoclineLeviathan + the manual §34.17.2 bypass cycle.
+*                                  @ThermoclineLeviathan @aegis-auto-reviewer
 
 # Trust-material paths — explicit + verbose to make scope obvious
 keys/                              @ThermoclineLeviathan
@@ -23,3 +28,36 @@ docs/architecture/                 @ThermoclineLeviathan
 
 # Maintenance scripts (parity gate is load-bearing)
 scripts/                           @ThermoclineLeviathan
+
+# Verifier-kit composite Action — externally consumed (uses: undercurrentai/
+# aegis-policy/actions/verify-aegis-attestation@<sha>); pins the canonical signing
+# keys + policy/verifier-policy-v1.yaml + runs the offline attestation verification.
+# Trust-spine material — human-only (closes the actions/ fall-through per QG-§54 audit).
+actions/                           @ThermoclineLeviathan
+
+# §44 Phase 2 carve-out source-of-truth — human-only (mirrors its self-protection
+# glob in .aegis-trust-spine-paths.yaml; the two defense layers stay in lockstep)
+/.aegis-trust-spine-paths.yaml     @ThermoclineLeviathan
+
+# Supply-chain dep files — human-only (cosmic-flute §54 Q2: close the residual
+# auto-approve gap; mirrored in .aegis-trust-spine-paths.yaml trust_spine_globs).
+# requirements-dev.txt exists today; the rest are a forward-proof superset — a
+# CODEOWNERS line for an absent path is harmless (matches nothing until created).
+/requirements-dev.txt              @ThermoclineLeviathan
+/requirements.txt                  @ThermoclineLeviathan
+/pyproject.toml                    @ThermoclineLeviathan
+/Makefile                          @ThermoclineLeviathan
+/package.json                      @ThermoclineLeviathan
+/package-lock.json                 @ThermoclineLeviathan
+/setup.py                          @ThermoclineLeviathan
+/setup.cfg                         @ThermoclineLeviathan
+/Pipfile                           @ThermoclineLeviathan
+/poetry.lock                       @ThermoclineLeviathan
+/tox.ini                           @ThermoclineLeviathan
+
+# Root CI / governance config — human-only (closes the root-config fall-through per
+# QG-§54 audit: a .gitignore secret-un-ignore + .afa.yaml gate-config edit must be
+# human-reviewed, not machine-auto-approved). Mirrored in trust_spine_globs.
+/.gitignore                        @ThermoclineLeviathan
+/.afa.yaml                         @ThermoclineLeviathan
+/.markdownlint.json                @ThermoclineLeviathan
