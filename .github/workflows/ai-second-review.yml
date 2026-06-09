@@ -887,8 +887,8 @@ jobs:
         # NOTE (cosmic-flute §44 startup-failure fix): `working-directory:` is
         # ILLEGAL on a `uses:` step (actionlint syntax-check → whole-workflow
         # startup_failure), and claude-code-action@v1 exposes NO working-
-        # directory/cwd input (--add-dir grants file access only; no --cwd
-        # launch flag is shipped). The CLI launches from $GITHUB_WORKSPACE, so
+        # directory/cwd input of any kind (verified in action.yml at this pin).
+        # The CLI it launches starts from $GITHUB_WORKSPACE, so
         # every allowedTools path below is prefixed with `aegis-policy-base/`
         # to keep reads/exec on the TRUSTED base.sha checkout; the lone
         # untrusted input is the diff DATA file (pr_diff.patch at runner root).
@@ -925,10 +925,19 @@ jobs:
             - ADR-001 trust model + ADR-002 key ceremony + ADR-003 algorithm migration alignment
             - scope creep: changes outside gated paths bundled with trust-spine changes
 
-            Write your review to the file `claude_review.md` in the current
-            working directory (aegis-policy-base). DO NOT post a PR comment
-            yourself — the workflow will post the file contents via a trusted
-            github-script step with an integrity nonce (run-id + head-sha).
+            NOTE on file access: the paths named in the bullets above are
+            repo-relative concepts. When you actually Read or Bash any file,
+            use the `aegis-policy-base/` prefix (e.g.
+            `aegis-policy-base/scripts/check_fingerprints.py`). Only
+            `aegis-policy-base/`-prefixed paths plus the diff DATA file
+            `pr_diff.patch` are permitted by allowedTools.
+
+            Write your review to the file `aegis-policy-base/claude_review.md`
+            (your launch/working directory is the runner workspace root; the
+            trusted base.sha checkout lives under aegis-policy-base/). DO NOT
+            post a PR comment yourself — the workflow will post the file
+            contents via a trusted github-script step with an integrity nonce
+            (run-id + head-sha).
 
             Your review file MUST start with <!-- ai-second-review:claude -->
             and include these sections in order:
@@ -957,18 +966,28 @@ jobs:
           # NEW-H2 (HIGH/C3): verdict parsed from local claude_review.md
           # artifact (not PR-comment scrape) — eliminates spoofability + stale-
           # run-prone classes entirely.
-          # Added Write(claude_review.md) for artifact-based pipeline.
+          # Added Write(aegis-policy-base/claude_review.md) for artifact-based pipeline.
           #
           # C4 (cosmic-flute §45.12.5.4): Codex C2 scope-gating. Narrowed
           # generic `Read` to per-path Read(...) entries scoped to the
-          # verifier-kit review surface (../pr_diff.patch + keys/ + scripts/
-          # + policy/ + docs/architecture/adr/ + .github/). Removed Bash(cat
-          # ../pr_diff.patch) — Claude reads via Read, no shell escape hatch
-          # for arbitrary file reads. The remaining Bash(...) entries are
-          # for verifier-kit invariant checks (fingerprint sha256, error-
-          # class parity, fingerprint parity) that need shell execution.
+          # verifier-kit review surface. Removed Bash(cat ...) — Claude reads
+          # via Read, no shell escape hatch for arbitrary file reads. The
+          # remaining Bash(...) entries are verifier-kit invariant checks
+          # (fingerprint sha256, error-class parity, fingerprint parity).
+          #
+          # §44 startup-fix (cosmic-flute §44.X): the step-level working-directory
+          # was removed (illegal on a uses: step → startup_failure), so the CLI
+          # launches from $GITHUB_WORKSPACE. Every allowedTools path is therefore
+          # prefixed with aegis-policy-base/ (the trusted base.sha checkout) for
+          # Read/Write/Bash; the lone exception is the diff DATA file
+          # Read(pr_diff.patch) at runner root (written there by the compute-diff
+          # run: step). Write target + the downstream Post-comment + Extract-verdict
+          # reads all use aegis-policy-base/claude_review.md. The Bash invariant-
+          # checks run from $GITHUB_WORKSPACE but the parity scripts are
+          # __file__-anchored (REPO_ROOT = Path(__file__).resolve().parent.parent),
+          # so they resolve their own repo files regardless of cwd.
           claude_args: |
-            --model claude-opus-4-6 --allowedTools "Read(../pr_diff.patch),Read(keys/**),Read(scripts/**),Read(policy/**),Read(docs/architecture/adr/**),Read(.github/**),Write(claude_review.md),Bash(shasum -a 256 keys/*),Bash(python3 scripts/check_error_class_parity.py),Bash(python3 scripts/check_fingerprints.py)"
+            --model claude-opus-4-6 --allowedTools "Read(pr_diff.patch),Read(aegis-policy-base/keys/**),Read(aegis-policy-base/scripts/**),Read(aegis-policy-base/policy/**),Read(aegis-policy-base/docs/architecture/adr/**),Read(aegis-policy-base/.github/**),Write(aegis-policy-base/claude_review.md),Bash(shasum -a 256 aegis-policy-base/keys/*),Bash(python3 aegis-policy-base/scripts/check_error_class_parity.py),Bash(python3 aegis-policy-base/scripts/check_fingerprints.py)"
 
       - name: Post review comment (claude) with run-id + head-sha nonce
         # NEW-H1 (HIGH/C3 / cosmic-flute §45.12.5.2): body passed via
