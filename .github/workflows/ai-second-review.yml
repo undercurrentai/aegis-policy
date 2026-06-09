@@ -582,18 +582,24 @@ jobs:
       - name: Run Codex review
         id: codex
         if: steps.diff.outputs.diff_empty != 'true'
-        working-directory: aegis-policy-base    # prompt + output execute from BASE (trusted)
         # Official OpenAI action. Installs the Codex CLI, starts a
         # Responses-API proxy from the OPENAI_API_KEY input, and runs
         # `codex exec` under the chosen sandbox strategy.
-        # prompt-file: relative to working-directory (BASE workspace).
-        # output-file: ../codex_review.md writes to runner workspace root so
-        # subsequent steps (Load review body, Post comment, etc.) read unchanged.
+        # NOTE (cosmic-flute §44 startup-failure fix): `working-directory:` is
+        # ILLEGAL on a `uses:` step (actionlint syntax-check → whole-workflow
+        # startup_failure). It is supplied as a `with:` INPUT below instead,
+        # which feeds `codex exec --cd` (the agent's exploration cwd → the
+        # trusted BASE checkout). prompt-file + output-file resolve relative to
+        # $GITHUB_WORKSPACE (the action's Node process cwd), NOT --cd: so
+        # prompt-file is subdir-prefixed to the BASE checkout, and output-file
+        # lands at runner root where the downstream Load review body / Post
+        # comment / Extract outputs steps read it unchanged.
         uses: openai/codex-action@0b91f4a2703c23df3102c3f0967d3c6db34eedef # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: .github/codex/prompts/second-review.md
-          output-file: ../codex_review.md
+          working-directory: aegis-policy-base    # codex exec --cd (agent explores BASE; trusted)
+          prompt-file: aegis-policy-base/.github/codex/prompts/second-review.md
+          output-file: codex_review.md
           # gpt-5.3-codex is OpenAI's "primary choice for coding and
           # development tasks" — specialized for agentic coding, code
           # editing, and tool-heavy workflows.
@@ -878,7 +884,15 @@ jobs:
       - name: Run Claude review
         id: claude
         if: steps.diff.outputs.diff_empty != 'true'
-        working-directory: aegis-policy-base    # allowedTools resolve relative to BASE (trusted)
+        # NOTE (cosmic-flute §44 startup-failure fix): `working-directory:` is
+        # ILLEGAL on a `uses:` step (actionlint syntax-check → whole-workflow
+        # startup_failure), and claude-code-action@v1 exposes NO working-
+        # directory/cwd input (--add-dir grants file access only; no --cwd
+        # launch flag is shipped). The CLI launches from $GITHUB_WORKSPACE, so
+        # every allowedTools path below is prefixed with `aegis-policy-base/`
+        # to keep reads/exec on the TRUSTED base.sha checkout; the lone
+        # untrusted input is the diff DATA file (pr_diff.patch at runner root).
+        # Write target + downstream read both use aegis-policy-base/claude_review.md.
         uses: anthropics/claude-code-action@c7c8889b30499b4e46f4c32b892e43cd364bc2fe # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
