@@ -976,7 +976,7 @@ jobs:
           # NEW-H2 (HIGH/C3): verdict parsed from local claude_review.md
           # artifact (not PR-comment scrape) — eliminates spoofability + stale-
           # run-prone classes entirely.
-          # Added Write(claude_review.md) for artifact-based pipeline.
+          # Added Write(./**) for artifact-based pipeline (see §44.24 below).
           #
           # §44.23 Option 2 (supersedes the §45.12.5.4 Codex-C2 per-path Read
           # narrowing): the cwd is a PURE trusted base.sha tree (no untrusted
@@ -992,11 +992,29 @@ jobs:
           # the 3 verifier-kit invariant checks (fingerprint sha256, error-class
           # parity, fingerprint parity), whose parity scripts are __file__-anchored
           # (REPO_ROOT = Path(__file__).resolve().parent.parent) so they resolve
-          # repo files from the root checkout. Write(claude_review.md) at the
-          # workspace root (FIX C); the downstream Post-comment + Extract-verdict
-          # reads use root-relative claude_review.md. NEW-H1/NEW-H2 (above) unchanged.
+          # repo files from the root checkout.
+          #
+          # §44.24 (root cause #4 — the LIVE re-verify on PR #26 of the §44.23
+          # Option-2 ship): the model PRODUCED a correct review (APPROVE/LOW) but
+          # could NOT persist it — 6/6 Write tool calls to the ABSOLUTE path
+          # /home/runner/_work/aegis-policy/aegis-policy/claude_review.md were
+          # DENIED against the bare-literal rule Write(claude_review.md), then it
+          # thrashed 5 Bash write-fallbacks (cat>/tee/python3 -c >) — all denied —
+          # over the full 13.5-min budget, so claude_review.md was never written
+          # and Extract-verdict fail-closed "artifact missing". Empirical matcher
+          # finding (per the bundled diagnostic execution_file, contradicting the
+          # docs' bare-literal-matches-absolute claim): a bare-literal Write rule
+          # does NOT match an absolute file_path, whereas the cwd-anchored glob
+          # Read(./**) matched every absolute-path read (zero Read denials). Fix:
+          # Write(claude_review.md) -> Write(./**), the exact structural mirror of
+          # the proven-working Read(./**) (same ./ anchor + ** glob + Read/Edit/
+          # Write matcher family). Least-privilege is preserved in substance: cwd
+          # is the ephemeral PURE trusted base.sha tree (no untrusted tree on disk
+          # per Option 2), every write is discarded at job end, and the ONLY file
+          # consumed downstream is claude_review.md (Post-comment + Extract-verdict
+          # read root-relative claude_review.md). NEW-H1/NEW-H2 (above) unchanged.
           claude_args: |
-            --model claude-opus-4-6 --allowedTools "Read(./**),Glob,Grep,LS,Write(claude_review.md),Bash(shasum -a 256 keys/*),Bash(python3 scripts/check_error_class_parity.py),Bash(python3 scripts/check_fingerprints.py)"
+            --model claude-opus-4-6 --allowedTools "Read(./**),Glob,Grep,LS,Write(./**),Bash(shasum -a 256 keys/*),Bash(python3 scripts/check_error_class_parity.py),Bash(python3 scripts/check_fingerprints.py)"
 
       - name: Upload Claude execution trace (diagnostic — §44.23)
         # Bundled diagnostic (cosmic-flute §44.23): the §44.23 dead run persisted
