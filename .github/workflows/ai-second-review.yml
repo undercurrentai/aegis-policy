@@ -986,7 +986,7 @@ jobs:
           # process.env, never shell-evaluated.
           claude_args: |
             --model claude-opus-4-6 --allowedTools "Read(./**),Glob,Grep,LS,Bash(shasum -a 256 keys/*),Bash(python3 scripts/check_error_class_parity.py),Bash(python3 scripts/check_fingerprints.py)"
-            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","REQUEST_CHANGES","COMMENT"]},"max_concern":{"type":"string","enum":["NONE","LOW","MEDIUM","HIGH","CRITICAL"]},"review_markdown":{"type":"string"}},"required":["verdict","max_concern","review_markdown"]}'
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","REQUEST_CHANGES","COMMENT"]},"max_concern":{"type":"string","enum":["NONE","LOW","MEDIUM","HIGH","CRITICAL"]},"review_markdown":{"type":"string","minLength":1}},"required":["verdict","max_concern","review_markdown"]}'
 
       - name: Upload Claude execution trace (diagnostic — §44.23)
         # Bundled diagnostic (cosmic-flute §44.23): the §44.23 dead run persisted
@@ -1026,10 +1026,17 @@ jobs:
         with:
           script: |
             let body = '_Claude structured output missing or unparseable — see workflow logs + execution-trace artifact._';
+            let meta = '';
             try {
               const parsed = JSON.parse(process.env.AEGIS_STRUCTURED_OUTPUT || '');
               if (parsed && typeof parsed.review_markdown === 'string' && parsed.review_markdown.trim()) {
                 body = parsed.review_markdown;
+              }
+              // §44.25 cycle-2 (GPT-NB1): surface verdict + max_concern in the comment
+              // (parity with gpt/codex comments; the prompt forbids them inside
+              // review_markdown). Read from the same parsed object — no extra parse.
+              if (parsed && parsed.verdict && parsed.max_concern) {
+                meta = `**Verdict:** ${String(parsed.verdict).toUpperCase()} · **Max Concern:** ${String(parsed.max_concern).toUpperCase()}\n\n`;
               }
             } catch (e) {
               core.warning(`structured_output parse failed: ${e.message}`);
@@ -1038,7 +1045,7 @@ jobs:
             const nonce = `<!-- run-id:${process.env.GITHUB_RUN_ID} head-sha:${process.env.PR_HEAD_SHA} -->`;
             const header = '## 🤖 Claude Opus 4.6 — Second-Reviewer Gate (§44 Phase 1 Pilot — ADVISORY)';
             const footer = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1). Accountable human reviewer: @ThermoclineLeviathan.*';
-            const full = `${marker}\n${nonce}\n\n${header}\n\n${body}\n\n${footer}`;
+            const full = `${marker}\n${nonce}\n\n${header}\n\n${meta}${body}\n\n${footer}`;
             const { owner, repo } = context.repo;
             const issue_number = context.issue.number;
             const comments = await github.paginate(github.rest.issues.listComments, {
@@ -1114,14 +1121,21 @@ jobs:
               await failClosed(`Claude max_concern '${maxConcern}' not in {${CONCERNS.join(', ')}}.`);
               return;
             }
+            // §44.25 cycle-2 (GPT-B1): fail-closed on empty review_markdown. A valid
+            // verdict/concern with no human-readable review is a vote with no audit
+            // trail — reject it so the lane does NOT count (verdict/max_concern stay
+            // empty → aggregator §54.5 rule-1 BLOCK). minLength:1 in the --json-schema
+            // is the model-layer guard; this is the consume-layer belt-and-suspenders.
+            const reviewMd = String(parsed.review_markdown || '').trim();
+            if (!reviewMd) {
+              await failClosed('Claude review_markdown empty — no human-readable review; fail closed.');
+              return;
+            }
             core.info(`Claude verdict (structured): ${verdict}; max_concern: ${maxConcern}`);
             core.setOutput('verdict', verdict);
             core.setOutput('max_concern', maxConcern);
 
-            // Job summary from review_markdown (verdict + concern shown explicitly)
-            const reviewMd = (typeof parsed.review_markdown === 'string' && parsed.review_markdown.trim())
-              ? parsed.review_markdown
-              : '_(no review_markdown in structured output)_';
+            // Job summary (verdict + concern shown explicitly)
             const summaryMeta = `**Verdict:** ${verdict} · **Max Concern:** ${maxConcern}`;
             await core.summary.addRaw(`${summaryHeader}\n\n${summaryMeta}\n\n${reviewMd}\n\n${summaryFooter}`).write();
 
