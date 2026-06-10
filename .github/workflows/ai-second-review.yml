@@ -1035,8 +1035,11 @@ jobs:
               // §44.25 cycle-2 (GPT-NB1): surface verdict + max_concern in the comment
               // (parity with gpt/codex comments; the prompt forbids them inside
               // review_markdown). Read from the same parsed object — no extra parse.
-              if (parsed && parsed.verdict && parsed.max_concern) {
-                meta = `**Verdict:** ${String(parsed.verdict).toUpperCase()} · **Max Concern:** ${String(parsed.max_concern).toUpperCase()}\n\n`;
+              // cycle-3 (gpt-5.4-pro): require string types (mirror the Extract-verdict
+              // strict check) so a malformed payload never renders a coerced/misleading
+              // meta line — comment + job outputs stay consistent.
+              if (parsed && typeof parsed.verdict === 'string' && typeof parsed.max_concern === 'string') {
+                meta = `**Verdict:** ${parsed.verdict.toUpperCase()} · **Max Concern:** ${parsed.max_concern.toUpperCase()}\n\n`;
               }
             } catch (e) {
               core.warning(`structured_output parse failed: ${e.message}`);
@@ -1109,10 +1112,28 @@ jobs:
               await failClosed(`Claude structured_output is not valid JSON (${e.message}).`);
               return;
             }
+            // §44.25 cycle-3 (gpt-5.4-pro HIGH): strict shape validation BEFORE any
+            // coercion. JSON.parse can yield null / an array / a scalar / an object
+            // with non-string fields. Without this: (1) String(["APPROVE"]) coerces
+            // to "APPROVE" → a structurally-invalid payload passes the enum check as
+            // a garbage vote (vote-integrity hole for the binding Phase 2 path); and
+            // (2) parsed.verdict on the scalar `null` throws BEFORE failClosed runs
+            // (ungraceful crash, no fail-closed summary). Require a PLAIN object with
+            // the 3 string fields so any malformed payload fail-closes here.
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              await failClosed('Claude structured_output is not a JSON object — fail closed.');
+              return;
+            }
+            if (typeof parsed.verdict !== 'string'
+                || typeof parsed.max_concern !== 'string'
+                || typeof parsed.review_markdown !== 'string') {
+              await failClosed('Claude structured_output fields are not all strings (verdict/max_concern/review_markdown) — fail closed.');
+              return;
+            }
             const VERDICTS = ['APPROVE', 'REQUEST_CHANGES', 'COMMENT'];
             const CONCERNS = ['NONE', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-            const verdict = String(parsed.verdict || '').trim().toUpperCase();
-            const maxConcern = String(parsed.max_concern || '').trim().toUpperCase();
+            const verdict = parsed.verdict.trim().toUpperCase();
+            const maxConcern = parsed.max_concern.trim().toUpperCase();
             if (!VERDICTS.includes(verdict)) {
               await failClosed(`Claude verdict '${verdict}' not in {${VERDICTS.join(', ')}}.`);
               return;
@@ -1126,7 +1147,7 @@ jobs:
             // trail — reject it so the lane does NOT count (verdict/max_concern stay
             // empty → aggregator §54.5 rule-1 BLOCK). minLength:1 in the --json-schema
             // is the model-layer guard; this is the consume-layer belt-and-suspenders.
-            const reviewMd = String(parsed.review_markdown || '').trim();
+            const reviewMd = parsed.review_markdown.trim();
             if (!reviewMd) {
               await failClosed('Claude review_markdown empty — no human-readable review; fail closed.');
               return;
