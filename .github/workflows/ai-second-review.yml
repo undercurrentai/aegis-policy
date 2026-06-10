@@ -1015,8 +1015,9 @@ jobs:
         # read — the Write tool denied every claude_review.md write (§44.23/.24).
         # NEW-H1 (HIGH/C3) preserved: the raw JSON is passed via process.env +
         # JSON.parse'd in-process (NEVER shell-evaluated), so any character in
-        # the model's prose stays injection-safe. NEW-H2 (HIGH/C3): nonce stamp
-        # ties the comment to THIS run + head SHA for observability cross-check.
+        # the model's prose stays injection-safe. Nonce stamp (observability —
+        # NOT the now-obsolete NEW-H2 verdict-count guard; see Run-Claude +
+        # Extract-verdict): ties the comment to THIS run + head SHA for cross-check.
         if: always() && steps.diff.outputs.diff_empty != 'true'
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -1068,16 +1069,37 @@ jobs:
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         with:
           script: |
+            const summaryHeader = '## 🤖 Claude Opus 4.6 — Second-Reviewer Gate (§44 Phase 1 Pilot)';
+            const summaryFooter = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1 — Pilot). Accountable human reviewer: @ThermoclineLeviathan.*';
+            // F1 (cosmic-flute §44.25 QG cycle-1): write a job summary on EVERY
+            // path — including the fail-closed branches — so the failure case
+            // (the one most useful for debugging) is not a blank summary. Parity
+            // with gpt-review + codex-review. setFailed is called FIRST so the
+            // fail-closed flag is set even if the (best-effort) summary write
+            // throws — verdict/max_concern outputs then resolve empty →
+            // aggregator §54.5 rule-1 BLOCK.
+            const failClosed = async (reason) => {
+              core.setFailed(reason);
+              try {
+                await core.summary.addRaw(
+                  `${summaryHeader}\n\n**Verdict:** _(none — fail closed)_ · **Max Concern:** _(none)_\n\n` +
+                  `Claude structured_output could not be validated: ${reason}\n\n` +
+                  `See the \`claude-review-execution-*\` artifact (full stream-json) for the model's turn.\n\n${summaryFooter}`,
+                ).write();
+              } catch (e) {
+                core.warning(`fail-closed summary write failed: ${e.message}`);
+              }
+            };
             const raw = process.env.AEGIS_STRUCTURED_OUTPUT || '';
             if (!raw.trim()) {
-              core.setFailed('Claude structured_output empty — fail closed (model produced no schema-conforming result).');
+              await failClosed('Claude structured_output empty — model produced no schema-conforming result.');
               return;
             }
             let parsed;
             try {
               parsed = JSON.parse(raw);
             } catch (e) {
-              core.setFailed(`Claude structured_output is not valid JSON (${e.message}) — fail closed.`);
+              await failClosed(`Claude structured_output is not valid JSON (${e.message}).`);
               return;
             }
             const VERDICTS = ['APPROVE', 'REQUEST_CHANGES', 'COMMENT'];
@@ -1085,11 +1107,11 @@ jobs:
             const verdict = String(parsed.verdict || '').trim().toUpperCase();
             const maxConcern = String(parsed.max_concern || '').trim().toUpperCase();
             if (!VERDICTS.includes(verdict)) {
-              core.setFailed(`Claude verdict '${verdict}' not in {${VERDICTS.join(', ')}} — fail closed.`);
+              await failClosed(`Claude verdict '${verdict}' not in {${VERDICTS.join(', ')}}.`);
               return;
             }
             if (!CONCERNS.includes(maxConcern)) {
-              core.setFailed(`Claude max_concern '${maxConcern}' not in {${CONCERNS.join(', ')}} — fail closed.`);
+              await failClosed(`Claude max_concern '${maxConcern}' not in {${CONCERNS.join(', ')}}.`);
               return;
             }
             core.info(`Claude verdict (structured): ${verdict}; max_concern: ${maxConcern}`);
@@ -1100,9 +1122,7 @@ jobs:
             const reviewMd = (typeof parsed.review_markdown === 'string' && parsed.review_markdown.trim())
               ? parsed.review_markdown
               : '_(no review_markdown in structured output)_';
-            const summaryHeader = '## 🤖 Claude Opus 4.6 — Second-Reviewer Gate (§44 Phase 1 Pilot)';
             const summaryMeta = `**Verdict:** ${verdict} · **Max Concern:** ${maxConcern}`;
-            const summaryFooter = '---\n*Automated via `.github/workflows/ai-second-review.yml` (cosmic-flute §44 Phase 1 — Pilot). Accountable human reviewer: @ThermoclineLeviathan.*';
             await core.summary.addRaw(`${summaryHeader}\n\n${summaryMeta}\n\n${reviewMd}\n\n${summaryFooter}`).write();
 
       - name: Stale-SHA guard (G2-residual — cosmic-flute §45.12.5.5)
