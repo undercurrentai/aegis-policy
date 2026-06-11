@@ -221,14 +221,14 @@ jobs:
       # `on: pull_request`. DO NOT migrate to `pull_request_target` — strictly
       # more dangerous, not safer.
       - name: Checkout BASE ref (trusted scripts/prompts source)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.event.pull_request.base.sha }}    # IMMUTABLE (closes Codex C1)
           fetch-depth: 0
           path: aegis-policy-base
 
       - name: Checkout PR HEAD (untrusted diff DATA only)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -535,14 +535,14 @@ jobs:
       # === DUAL-CHECKOUT BASE/HEAD per cosmic-flute §45.12.5.1 ===
       # Same pattern as gpt-review — see that job for full rationale.
       - name: Checkout BASE ref (trusted scripts/prompts source)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.event.pull_request.base.sha }}    # IMMUTABLE (closes Codex C1)
           fetch-depth: 0
           path: aegis-policy-base
 
       - name: Checkout PR HEAD (untrusted diff DATA only)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
@@ -854,7 +854,7 @@ jobs:
       # (they have legal cwd levers — gpt run: working-directory; codex --cd);
       # claude-review is asymmetric here. See gpt-review for diff-surface rationale.
       - name: Checkout BASE ref to workspace ROOT (trusted base.sha)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.event.pull_request.base.sha }}    # IMMUTABLE (closes Codex C1)
           fetch-depth: 0
