@@ -121,6 +121,26 @@ on:
         type: string
         default: "github-actions"
         description: "Caller identifier for AEGIS audit trail."
+      on_unavailable:
+        type: string
+        default: "block"
+        description: >-
+          Disposition when the AEGIS service is UNAVAILABLE (502/503/504 or a
+          connection-level failure against a canonical host). "block" =
+          fail-closed (DEFAULT). "warn" = neutral check + loud annotation.
+          Ignored when shadow_mode is true, because shadow is advisory by
+          definition and must never block — that omission is what deadlocked
+          aegis-governance during the 2026-06/07 outage. Availability is
+          attacker-inducible (a request flood produces genuine 503s), so "warn"
+          under enforcement is a deliberate, auditable risk acceptance.
+      allowed_api_hosts:
+        type: string
+        default: "api.aegis.undercurrentholdings.com aegis-api-980022636831.us-central1.run.app"
+        description: >-
+          Space-separated hostname allowlist for api_url (https only). A host
+          outside this list fails closed BEFORE the API key is transmitted, and
+          only these canonical hosts can ever produce an "unavailable"
+          classification.
     secrets:
       AEGIS_API_KEY:
         required: true
@@ -337,6 +357,18 @@ jobs:
           # In shadow mode, never fail on HALT (let workflow continue-on-error swallow it).
           # In enforcing mode, fail on HALT so the workflow exits non-zero and blocks merge.
           fail_on_halt: ${{ inputs.shadow_mode == false }}
+          # Fail-CLOSED on unavailability ONLY when enforcing AND on_unavailable=block.
+          #
+          # Shadow mode is advisory by contract — `fail_on_halt` is already false
+          # here, so even a HALT cannot block. The availability path was simply
+          # never covered, and that gap is the deadlock: `continue-on-error` at
+          # job level (line ~139) makes the workflow RUN conclusion green but
+          # leaves the JOB check-run at `failure`, and the org ruleset
+          # `aegis-enforce-required-check` gates on the job check-run. So a
+          # shadow-mode repo was blocked by a step exiting non-zero even though
+          # shadow is supposed to be incapable of blocking.
+          fail_on_unavailable: ${{ inputs.shadow_mode == false && inputs.on_unavailable != 'warn' }}
+          allowed_api_hosts: ${{ inputs.allowed_api_hosts }}
 
       - name: Attach AEGIS verdict as Checks API run
         if: always()
@@ -351,6 +383,8 @@ jobs:
           AEGIS_RATIONALE: ${{ steps.aegis.outputs.rationale }}
           AEGIS_DECISION_JSON: ${{ steps.aegis.outputs.decision_json }}
           SHADOW_MODE: ${{ inputs.shadow_mode }}
+          AEGIS_DEGRADED: ${{ steps.aegis.outputs.degraded }}
+          ON_UNAVAILABLE: ${{ inputs.on_unavailable }}
         with:
           script: |
             const status = (process.env.AEGIS_STATUS || 'error').toLowerCase();
@@ -361,20 +395,31 @@ jobs:
             // Map AEGIS verdict to GitHub Checks API conclusion.
             // In shadow mode HALT becomes 'neutral' (advisory) so the check does not
             // surface as a failure in the PR merge UI; in enforcing mode HALT is 'failure'.
+            const degraded = process.env.AEGIS_DEGRADED === 'true';
+            const onUnavailable = process.env.ON_UNAVAILABLE || 'block';
+            const unavailableBlocks = !shadow && onUnavailable !== 'warn';
+
             const conclusionMap = {
               proceed:  'success',
               pause:    'neutral',
               escalate: 'neutral',
               halt:     shadow ? 'neutral' : 'failure',
+              // An outage is NEVER 'success'. No verdict was rendered, so the
+              // check must not read as an approval — it is 'neutral' (advisory,
+              // non-blocking) or 'failure' (fail-closed), never green.
+              unavailable: unavailableBlocks ? 'failure' : 'neutral',
               error:    'neutral',
             };
             const conclusion = conclusionMap[status] || 'neutral';
 
             const modeLabel = shadow ? '[SHADOW]' : '[ENFORCING]';
-            const title = `AEGIS ${modeLabel}: ${status.toUpperCase()} (confidence ${confidence})`;
+            const degradedLabel = degraded ? ' [DEGRADED — NOT A GOVERNANCE VERDICT]' : '';
+            const title = `AEGIS ${modeLabel}: ${status.toUpperCase()} (confidence ${confidence})${degradedLabel}`;
 
             // Include decision_json in summary as fenced JSON for the user to inspect.
-            let summary = `**Rationale**: ${rationale}\n\n`;
+            let summary = degraded
+              ? `> **DEGRADED RESULT.** AEGIS was unavailable; no governance verdict was rendered and no audit-chain entry was written. This check did not approve anything. Retro-reconcile once the service is restored.\n\n**Rationale**: ${rationale}\n\n`
+              : `**Rationale**: ${rationale}\n\n`;
             const decisionJson = process.env.AEGIS_DECISION_JSON;
             if (decisionJson) {
               summary += `<details><summary>Full decision JSON</summary>\n\n\`\`\`json\n${decisionJson}\n\`\`\`\n\n</details>`;
