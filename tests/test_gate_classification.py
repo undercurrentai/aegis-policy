@@ -196,6 +196,38 @@ class TestAntiTier2:
                     "execute or evaluate code from the repo under review"
                 )
 
+    def test_allowed_api_hosts_defaults_match_across_files(self) -> None:
+        """The host allowlist is declared twice and must never drift.
+
+        Raised by the Claude Opus 4.6 second-reviewer on PR #32: the default
+        embeds two hostnames in BOTH the composite and the reusable workflow.
+        If they diverge, the reusable workflow silently overrides the composite
+        and the security property ("only canonical hosts may yield
+        `availability`") is decided by whichever file the reader did not check.
+        """
+        import re
+
+        root = Path(__file__).resolve().parents[1]
+        pattern = re.compile(
+            r"allowed_api_hosts:.*?default:\s*['\"]?([^'\"\n]+)", re.DOTALL
+        )
+        composite = pattern.search(
+            (root / ".github" / "actions" / "aegis-gate" / "action.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        workflow = pattern.search(
+            (root / ".github" / "workflows" / "aegis-enforce.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert composite and workflow, "allowed_api_hosts default not found in both files"
+        assert composite.group(1).split() == workflow.group(1).split(), (
+            "allowed_api_hosts defaults drifted:\n"
+            f"  composite: {composite.group(1)!r}\n"
+            f"  workflow : {workflow.group(1)!r}"
+        )
+
     def test_reusable_workflow_checks_out_only_aegis_policy(self) -> None:
         wf = (
             Path(__file__).resolve().parents[1]
