@@ -85,6 +85,25 @@ inputs:
     description: 'Fail the workflow if AEGIS returns HALT'
     required: false
     default: 'true'
+  fail_on_unavailable:
+    # QG48-17: fail-CLOSED by default. An AVAILABILITY failure (502/503/504, or an
+    # allowlisted connection-level curl rc, against a CANONICAL host) now yields
+    # status=unavailable instead of a bare exit 1. This input decides whether that
+    # fails the step. aegis-enforce.yml computes it as
+    #   (shadow_mode == false && on_unavailable != 'warn')
+    # so a direct-composite caller that omits it gets fail-closed.
+    description: 'Fail the step when AEGIS is unavailable (true = fail-closed; false = emit status "unavailable" and exit 0)'
+    required: false
+    default: 'true'
+  allowed_api_hosts:
+    # QG48-16: two independent jobs. (a) The Bearer token must never be sent to a
+    # host we do not control. (b) ONLY these canonical hosts may ever produce an
+    # "unavailable" classification — otherwise `api_url: https://nonexistent.invalid`
+    # is a one-line fail-open primitive: point the gate at a dead host, get
+    # "unavailable", merge without a verdict.
+    description: 'Space-separated hostname allowlist for api_url (https only). A host outside this list fails closed BEFORE the API key is transmitted.'
+    required: false
+    default: 'api.aegis.undercurrentholdings.com aegis-api-980022636831.us-central1.run.app'
 
 outputs:
   status:
@@ -99,6 +118,12 @@ outputs:
   decision_json:
     description: 'Full decision JSON'
     value: ${{ steps.evaluate.outputs.decision_json }}
+  degraded:
+    description: '"true" when the result is NOT an authoritative service verdict (no audit-chain entry was written).'
+    value: ${{ steps.evaluate.outputs.degraded }}
+  failure_class:
+    description: 'ok | availability | rejected | malformed — why Tier 1 did or did not produce a verdict.'
+    value: ${{ steps.evaluate.outputs.failure_class }}
 
 runs:
   using: 'composite'
@@ -120,8 +145,31 @@ runs:
         INPUT_COMPLEXITY_SCORE: ${{ inputs.complexity_score }}
         INPUT_QUALITY_SCORE: ${{ inputs.quality_score }}
         INPUT_AGENT_ID: ${{ inputs.agent_id }}
+        INPUT_FAIL_ON_UNAVAILABLE: ${{ inputs.fail_on_unavailable }}
+        INPUT_ALLOWED_API_HOSTS: ${{ inputs.allowed_api_hosts }}
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
+
+        # QG48-16 (a): validate api_url BEFORE the Bearer token is transmitted.
+        # https-only + hostname allowlist. A non-allowlisted host fails closed
+        # here, so the key is never sent off-allowlist and a dead custom host can
+        # never be used to manufacture an "unavailable" verdict.
+        API_HOST=$(printf '%s' "${AEGIS_API_URL}" | python3 -c "
+        import sys, urllib.parse
+        u = urllib.parse.urlsplit(sys.stdin.read().strip())
+        if u.scheme != 'https':
+            sys.exit(0)
+        print(u.hostname or '')
+        ")
+        CANONICAL_HOST=false
+        for _h in ${INPUT_ALLOWED_API_HOSTS}; do
+          if [ "${API_HOST}" = "${_h}" ]; then CANONICAL_HOST=true; break; fi
+        done
+        if [ "${CANONICAL_HOST}" != "true" ]; then
+          echo "::error::api_url host '${API_HOST:-<none>}' is not in the allowlist (or is not https). Fail-closed; the API key was NOT transmitted."
+          exit 1
+        fi
 
         # QG48-9: per-invocation temp file (was a fixed /tmp/aegis-response.json —
         # concurrent jobs on a persistent self-hosted runner would race + leak
@@ -164,14 +212,63 @@ runs:
         CURL_RC=$?
         set -e
 
-        if [ "${CURL_RC}" -ne 0 ] || [ -z "${HTTP_CODE}" ] || [ "${HTTP_CODE}" != "200" ]; then
-          echo "::error::AEGIS API call failed (curl rc=${CURL_RC}, http=${HTTP_CODE:-none})"
+        # QG48-16: classify the outcome BEFORE deciding what it means.
+        # "AEGIS says no" and "AEGIS did not answer" are different facts and only
+        # the first is a governance verdict. Collapsing them is what let a closed
+        # GCP billing account (HTTP 503 since 2026-06-28) make aegis-governance's
+        # main branch unmergeable — including the PRs that fix the outage.
+        FAILURE_CLASS=$(CURL_RC="${CURL_RC}" HTTP_CODE="${HTTP_CODE}" CANONICAL_HOST="${CANONICAL_HOST}" \
+          bash "${GITHUB_ACTION_PATH}/classify.sh")
+        echo "failure_class=${FAILURE_CLASS}" >> "$GITHUB_OUTPUT"
+
+        if [ "${FAILURE_CLASS}" != "ok" ]; then
           # QG48-4: redact Bearer / key-like tokens + truncate the response body
           # before echoing to the PUBLIC-repo Actions log.
-          sed -E 's/(Bearer|Authorization|sk-|uk_)[A-Za-z0-9._-]+/[REDACTED]/gI' "${RESPONSE_FILE}" | head -c 2000 || true
-          echo ""
+          REDACTED=$(sed -E 's/(Bearer|Authorization|sk-|uk_|ghs_|ghp_|gho_|github_pat_)[A-Za-z0-9._-]+/[REDACTED]/gI' "${RESPONSE_FILE}" | head -c 2000 || true)
+
+          if [ "${FAILURE_CLASS}" = "availability" ]; then
+            # AEGIS is DOWN. No verdict was rendered, so this is NOT an approval.
+            # It is a first-class `unavailable` state; the caller decides the
+            # disposition via fail_on_unavailable (fail-CLOSED by default).
+            echo "degraded=true" >> "$GITHUB_OUTPUT"
+            echo "status=unavailable" >> "$GITHUB_OUTPUT"
+            echo "confidence=N/A" >> "$GITHUB_OUTPUT"
+            DELIM_U="AEGIS_EOF_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+            {
+              echo "rationale<<${DELIM_U}"
+              echo "AEGIS was unreachable (curl rc=${CURL_RC}, http=${HTTP_CODE:-none}). No governance verdict was rendered and no audit-chain entry was written."
+              echo "${DELIM_U}"
+              echo "decision_json<<${DELIM_U}"
+              echo '{"status":"unavailable","degraded":true}'
+              echo "${DELIM_U}"
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo "### AEGIS Governance Decision"
+              echo ""
+              echo "> **DEGRADED — NOT A GOVERNANCE VERDICT.** AEGIS was unavailable"
+              echo "> (curl rc=\`${CURL_RC}\`, http=\`${HTTP_CODE:-none}\`). Nothing was approved."
+              echo "> Retro-reconcile once the service is restored."
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            if [ "${INPUT_FAIL_ON_UNAVAILABLE}" = "true" ]; then
+              echo "::error::AEGIS unavailable and fail_on_unavailable=true — failing closed."
+              exit 1
+            fi
+            echo "::warning::AEGIS unavailable — emitting degraded 'unavailable' status. This check did NOT approve anything."
+            exit 0
+          fi
+
+          # rejected  -> AEGIS is UP and refusing us (auth/quota/bad request/app error).
+          # malformed -> unclassifiable.
+          # Both are real signals about the caller. ALWAYS fail closed.
+          echo "degraded=false" >> "$GITHUB_OUTPUT"
+          echo "::error::AEGIS API call ${FAILURE_CLASS} (curl rc=${CURL_RC}, http=${HTTP_CODE:-none}) — failing closed."
+          printf '%s\n' "${REDACTED}"
           exit 1
         fi
+
+        # Tier 1 succeeded: an authoritative verdict with an audit-chain entry.
+        echo "degraded=false" >> "$GITHUB_OUTPUT"
 
         # Parse response.
         DECISION=$(cat "${RESPONSE_FILE}")
@@ -234,5 +331,13 @@ runs:
         if [ "${GATE_STATUS_LC}" = "halt" ]; then
           echo "::error::AEGIS governance gate returned HALT: ${GATE_RATIONALE}"
           exit 1
+        fi
+        # QG48-17: never report a degraded no-verdict as "passed". Reaching here
+        # with `unavailable` means fail_on_unavailable was false (shadow, or an
+        # explicit warn opt-in) and the evaluate step already exited 0. Say what
+        # actually happened rather than implying an approval was granted.
+        if [ "${GATE_STATUS_LC}" = "unavailable" ]; then
+          echo "::warning::AEGIS was UNAVAILABLE — no governance verdict was rendered. This gate did not approve anything."
+          exit 0
         fi
         echo "AEGIS governance gate passed: ${GATE_STATUS}"
