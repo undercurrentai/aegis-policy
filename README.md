@@ -44,4 +44,4 @@ Email `security@undercurrentholdings.com` or use GitHub's [private vulnerability
 
 ## Status
 
-`v1.2.3` — Sprint 6/F1 SHIP COMPLETE + §38 forensic-audit chain (aegis-governance v1.2.7 in production since 2026-05-21). Sprint 7/G1-G3 readiness 🟢 GREEN UNBLOCKED at architectural-contract layer. See `CHANGELOG.md` for the cumulative ship cycle (E1 → E1.5 → E2 → E3 → sub-phase 3a → QG-§37.18 → sub-phase 4 v1.2.6 → §38 v1.2.7 → docs/roadmap.md content refresh).
+`v1.2.7` — Sprint 7/G1 SHIP COMPLETE: the org-wide AEGIS-gate enforce substrate is live in **shadow** mode (org-Ruleset `aegis-enforce-required-check` `17101026`, `bypass_actors=[]`) on both source repos, the cross-repo `resolve_callee` fix shipped (§51, `v1.2.6`), and the §44 Phase 2 tri-AI second-reviewer aggregator now auto-approves routine PRs (3-AI consensus + trust-spine carve-out + change_class gate). aegis-governance `v1.2.7` in production since 2026-05-21. Sprint 7/G2-G3 (consumer rollout) unblocked at the architectural-contract layer. See `CHANGELOG.md` + `docs/roadmap.md` for the cumulative ship cycle (E1 → E1.5 → E2 → E3 → §48 relocation → §51 cross-repo fix → §44 Phase 2 auto-approve).
