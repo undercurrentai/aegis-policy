@@ -281,6 +281,7 @@ jobs:
         run: pip install --quiet "openai>=2.11"
 
       - name: Run gpt-5.4-pro review
+        id: gpt    # referenced as steps.gpt.outcome by the fallback placeholder below
         if: steps.diff.outputs.diff_empty != 'true'
         working-directory: aegis-policy-base    # script SOURCED FROM BASE (trusted)
         env:
@@ -306,9 +307,18 @@ jobs:
         # always() so a failed review step still posts the fallback
         # markdown that gpt_review.py writes before exiting non-zero.
         if: always() && steps.diff.outputs.diff_empty != 'true'
+        env:
+          GPT_STEP_OUTCOME: ${{ steps.gpt.outcome }}
         run: |
           if [ ! -s gpt_review.md ]; then
-            printf '_Review produced no output. Check the workflow logs for details._\n' > gpt_review.md
+            # Reaching here means gpt_review.py wrote NOTHING — its own
+            # top-level safety net also failed, or Python never started. That is
+            # precisely the case with the least information available, so the
+            # step outcome is the only signal left; naming it beats "check the
+            # logs". Symmetric with the Codex lane's placeholder.
+            # shellcheck disable=SC2016  # backticks are literal Markdown here.
+            printf '_Review produced no output (gpt-5.4-pro step: `%s`). **Infrastructure failure, not a review verdict — nothing was assessed.** See the `Run gpt-5.4-pro review` step log._\n' \
+              "${GPT_STEP_OUTCOME:-unknown}" > gpt_review.md
           fi
           delimiter="__AEGIS_REVIEW_BODY_EOF_${{ github.run_id }}__"
           {
