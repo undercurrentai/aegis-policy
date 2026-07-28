@@ -589,17 +589,30 @@ jobs:
         # ILLEGAL on a `uses:` step (actionlint syntax-check → whole-workflow
         # startup_failure). It is supplied as a `with:` INPUT below instead,
         # which feeds `codex exec --cd` (the agent's exploration cwd → the
-        # trusted BASE checkout). prompt-file + output-file resolve relative to
-        # $GITHUB_WORKSPACE (the action's Node process cwd), NOT --cd: so
-        # prompt-file is subdir-prefixed to the BASE checkout, and output-file
-        # lands at runner root where the downstream Load review body / Post
-        # comment / Extract outputs steps read it unchanged.
+        # trusted BASE checkout).
+        #
+        # PATH RESOLUTION — corrected 2026-07-28. The previous note here claimed
+        # output-file resolves against $GITHUB_WORKSPACE "NOT --cd". That is
+        # false, and it made this lane fail on EVERY PR that ran it (#30, #32,
+        # #33, #34 — four consecutive "Codex review file missing or empty").
+        # The action forwards output-file verbatim to
+        # `codex exec --output-last-message`, which the CLI resolves against
+        # --cd. So a bare `codex_review.md` was written to
+        # aegis-policy-base/codex_review.md while all eight downstream consumers
+        # read ./codex_review.md at the runner root — the file was always
+        # produced, and never where anyone looked.
+        #
+        # `../` climbs back to the runner root, matching the gpt-5.4-pro lane
+        # (see its `--output ../gpt_review.md`), which had this right and is why
+        # that lane passes while this one did not. prompt-file IS
+        # workspace-relative (the action reads it in-process before exec), so it
+        # keeps its subdir prefix — the asymmetry is intentional, not a typo.
         uses: openai/codex-action@0b91f4a2703c23df3102c3f0967d3c6db34eedef # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           working-directory: aegis-policy-base    # codex exec --cd (agent explores BASE; trusted)
           prompt-file: aegis-policy-base/.github/codex/prompts/second-review.md
-          output-file: codex_review.md
+          output-file: ../codex_review.md    # relative to --cd (aegis-policy-base) -> runner root
           # gpt-5.3-codex is OpenAI's "primary choice for coding and
           # development tasks" — specialized for agentic coding, code
           # editing, and tool-heavy workflows.
