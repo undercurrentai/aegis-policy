@@ -574,11 +574,41 @@ def _main_impl(args: argparse.Namespace) -> int:
 
     status = getattr(final, "status", None)
     if status != "completed":
+        # Surface the API's own error object. Reporting only the status made
+        # every non-completed run look identical — "response status was
+        # 'failed'" tells a reader nothing about WHY, so an account/billing
+        # fault, a capacity error, and a content filter are indistinguishable.
+        #
+        # This cost real time on 2026-07-28: the Codex lane failed with an
+        # explicit "Your account is not active, please check your billing
+        # details" while this lane failed opaquely, so whether the two shared a
+        # cause could not be settled from CI output at all. The Responses API
+        # returns the reason on `response.error`; it was being discarded.
+        detail = ""
+        err = getattr(final, "error", None)
+        if err is not None:
+            code = getattr(err, "code", None) or (
+                err.get("code") if isinstance(err, dict) else None
+            )
+            message = getattr(err, "message", None) or (
+                err.get("message") if isinstance(err, dict) else None
+            )
+            parts = [str(p) for p in (code, message) if p]
+            if parts:
+                detail = f" — {': '.join(parts)}"
+        if not detail:
+            incomplete = getattr(final, "incomplete_details", None)
+            reason = getattr(incomplete, "reason", None) or (
+                incomplete.get("reason") if isinstance(incomplete, dict) else None
+            )
+            if reason:
+                detail = f" — incomplete: {reason}"
+
         _write_fallback(
             args.output,
-            f"response status was {status!r}, not completed",
+            f"response status was {status!r}, not completed{detail}",
         )
-        sys.stderr.write(f"gpt_review: non-completed status: {status}\n")
+        sys.stderr.write(f"gpt_review: non-completed status: {status}{detail}\n")
         return 5
 
     markdown = _extract_text(final).strip()
