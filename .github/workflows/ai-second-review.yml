@@ -589,30 +589,17 @@ jobs:
         # ILLEGAL on a `uses:` step (actionlint syntax-check → whole-workflow
         # startup_failure). It is supplied as a `with:` INPUT below instead,
         # which feeds `codex exec --cd` (the agent's exploration cwd → the
-        # trusted BASE checkout).
-        #
-        # PATH RESOLUTION — corrected 2026-07-28. The previous note here claimed
-        # output-file resolves against $GITHUB_WORKSPACE "NOT --cd". That is
-        # false, and it made this lane fail on EVERY PR that ran it (#30, #32,
-        # #33, #34 — four consecutive "Codex review file missing or empty").
-        # The action forwards output-file verbatim to
-        # `codex exec --output-last-message`, which the CLI resolves against
-        # --cd. So a bare `codex_review.md` was written to
-        # aegis-policy-base/codex_review.md while all eight downstream consumers
-        # read ./codex_review.md at the runner root — the file was always
-        # produced, and never where anyone looked.
-        #
-        # `../` climbs back to the runner root, matching the gpt-5.4-pro lane
-        # (see its `--output ../gpt_review.md`), which had this right and is why
-        # that lane passes while this one did not. prompt-file IS
-        # workspace-relative (the action reads it in-process before exec), so it
-        # keeps its subdir prefix — the asymmetry is intentional, not a typo.
+        # trusted BASE checkout). prompt-file + output-file resolve relative to
+        # $GITHUB_WORKSPACE (the action's Node process cwd), NOT --cd: so
+        # prompt-file is subdir-prefixed to the BASE checkout, and output-file
+        # lands at runner root where the downstream Load review body / Post
+        # comment / Extract outputs steps read it unchanged.
         uses: openai/codex-action@0b91f4a2703c23df3102c3f0967d3c6db34eedef # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           working-directory: aegis-policy-base    # codex exec --cd (agent explores BASE; trusted)
           prompt-file: aegis-policy-base/.github/codex/prompts/second-review.md
-          output-file: ../codex_review.md    # relative to --cd (aegis-policy-base) -> runner root
+          output-file: codex_review.md
           # gpt-5.3-codex is OpenAI's "primary choice for coding and
           # development tasks" — specialized for agentic coding, code
           # editing, and tool-heavy workflows.
@@ -628,9 +615,24 @@ jobs:
 
       - name: Load review body into env
         if: always() && steps.diff.outputs.diff_empty != 'true'
+        env:
+          CODEX_STEP_OUTCOME: ${{ steps.codex.outcome }}
         run: |
           if [ ! -s codex_review.md ]; then
-            printf '_Codex review produced no output. Check the workflow logs for details._\n' > codex_review.md
+            # Say WHY, not just THAT. "produced no output — check the logs" is an
+            # absence-of-signal message: it reads as a flaky model, so four
+            # consecutive identical failures (#30/#32/#33/#34) looked like noise
+            # rather than one persistent operator-actionable fault. The real
+            # cause sat in the step log the whole time:
+            #   ERROR: stream disconnected before completion: Your account is
+            #   not active, please check your billing details on our website.
+            # An unfunded API account and a genuine model failure are different
+            # facts needing different responses; a placeholder that cannot tell
+            # them apart sends the reader somewhere useless.
+            # shellcheck disable=SC2016  # backticks are literal Markdown here,
+            # not command substitution; %s is expanded by printf's argument.
+            printf '_Codex review produced no output (Codex CLI step: `%s`). **Infrastructure failure, not a review verdict — nothing was assessed.** See the `Run Codex review` step log. Most common cause: an inactive or unfunded OpenAI account (`Your account is not active, please check your billing details`)._\n' \
+              "${CODEX_STEP_OUTCOME:-unknown}" > codex_review.md
           fi
           delimiter="__AEGIS_REVIEW_BODY_EOF_${{ github.run_id }}__"
           {
