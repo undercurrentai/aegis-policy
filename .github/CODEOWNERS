@@ -4,69 +4,78 @@
 # Per cosmic-flute §17 Critical 3: this repo has a stricter trust model than
 # the implementing repos. Every change requires explicit owner approval.
 #
-# Single owner today (sole engineer); documented growth path: when team grows,
-# replace `@ThermoclineLeviathan` with `@undercurrentai/security-reviewers`
-# (2-of-N team) and require 2 reviewers on `keys/`, `schema/`, `policy/` paths.
+# Trust-spine owner is the TEAM @undercurrentai/security-reviewers (created
+# 2026-07-29, the growth path this header always documented). The point of the
+# team indirection: adding a reviewer is now a team-membership change — an
+# org-settings operation touching no tracked file — instead of a CODEOWNERS
+# edit that itself costs a §34.17.2 break-glass cycle. Sole member today is
+# @ThermoclineLeviathan, so behavior is UNCHANGED until a second human joins;
+# GitHub still forbids self-approval, so the bypass cycle remains the merge
+# path for trust-spine PRs exactly until that day. (A second account owned by
+# the same person was considered and REFUSED — see docs/roadmap.md.)
+# Future hardening once 2-of-N is real: required_approving_review_count: 2 on
+# `keys/`, `schema/`, `policy/` paths.
 
 # Default — routine (non-trust-spine, non-dep-file) changes may be code-owner-
 # approved by the §44 Phase 2 machine-user @aegis-auto-reviewer (3-AI consensus
 # auto-approve via .github/workflows/ai-second-review.yml aggregator-approve job;
 # cosmic-flute §54). Last-match-wins: @aegis-auto-reviewer is on the `*` line ONLY
 # and is EXCLUDED from every trust-spine + carve-out + dep-file entry below, so
-# those PRs still require @ThermoclineLeviathan + the manual §34.17.2 bypass cycle.
+# those PRs still require a @undercurrentai/security-reviewers member (today:
+# only @ThermoclineLeviathan) + the manual §34.17.2 bypass cycle.
 *                                  @ThermoclineLeviathan @aegis-auto-reviewer
 
 # Trust-material paths — explicit + verbose to make scope obvious
-keys/                              @ThermoclineLeviathan
-schema/                            @ThermoclineLeviathan
-policy/                            @ThermoclineLeviathan
-.github/                           @ThermoclineLeviathan
-.github/workflows/                 @ThermoclineLeviathan
+keys/                              @undercurrentai/security-reviewers
+schema/                            @undercurrentai/security-reviewers
+policy/                            @undercurrentai/security-reviewers
+.github/                           @undercurrentai/security-reviewers
+.github/workflows/                 @undercurrentai/security-reviewers
 
 # ADRs — architectural changes need owner sign-off
-docs/architecture/                 @ThermoclineLeviathan
+docs/architecture/                 @undercurrentai/security-reviewers
 
 # Maintenance scripts (parity gate is load-bearing)
-scripts/                           @ThermoclineLeviathan
+scripts/                           @undercurrentai/security-reviewers
 
 # Verifier-kit composite Action — externally consumed (uses: undercurrentai/
 # aegis-policy/actions/verify-aegis-attestation@<sha>); pins the canonical signing
 # keys + policy/verifier-policy-v1.yaml + runs the offline attestation verification.
 # Trust-spine material — human-only (closes the actions/ fall-through per QG-§54 audit).
-actions/                           @ThermoclineLeviathan
+actions/                           @undercurrentai/security-reviewers
 
 # §44 Phase 2 carve-out source-of-truth — human-only (mirrors its self-protection
 # glob in .aegis-trust-spine-paths.yaml; the two defense layers stay in lockstep)
-/.aegis-trust-spine-paths.yaml     @ThermoclineLeviathan
+/.aegis-trust-spine-paths.yaml     @undercurrentai/security-reviewers
 
 # Supply-chain dep files — human-only (cosmic-flute §54 Q2: close the residual
 # auto-approve gap; mirrored in .aegis-trust-spine-paths.yaml trust_spine_globs).
 # requirements-dev.txt and requirements-ci.txt (its hash-pinned lockfile — the
 # file CI actually installs) exist today; the rest are a forward-proof superset —
 # a CODEOWNERS line for an absent path is harmless (matches nothing until created).
-/requirements-dev.txt              @ThermoclineLeviathan
-/requirements-ci.txt               @ThermoclineLeviathan
-/requirements-aux.txt              @ThermoclineLeviathan
-/requirements-aux-ci.txt           @ThermoclineLeviathan
-/requirements-verify.txt           @ThermoclineLeviathan
-/requirements-verify-ci.txt        @ThermoclineLeviathan
-/requirements.txt                  @ThermoclineLeviathan
-/pyproject.toml                    @ThermoclineLeviathan
-/Makefile                          @ThermoclineLeviathan
-/package.json                      @ThermoclineLeviathan
-/package-lock.json                 @ThermoclineLeviathan
-/setup.py                          @ThermoclineLeviathan
-/setup.cfg                         @ThermoclineLeviathan
-/Pipfile                           @ThermoclineLeviathan
-/poetry.lock                       @ThermoclineLeviathan
-/tox.ini                           @ThermoclineLeviathan
+/requirements-dev.txt              @undercurrentai/security-reviewers
+/requirements-ci.txt               @undercurrentai/security-reviewers
+/requirements-aux.txt              @undercurrentai/security-reviewers
+/requirements-aux-ci.txt           @undercurrentai/security-reviewers
+/requirements-verify.txt           @undercurrentai/security-reviewers
+/requirements-verify-ci.txt        @undercurrentai/security-reviewers
+/requirements.txt                  @undercurrentai/security-reviewers
+/pyproject.toml                    @undercurrentai/security-reviewers
+/Makefile                          @undercurrentai/security-reviewers
+/package.json                      @undercurrentai/security-reviewers
+/package-lock.json                 @undercurrentai/security-reviewers
+/setup.py                          @undercurrentai/security-reviewers
+/setup.cfg                         @undercurrentai/security-reviewers
+/Pipfile                           @undercurrentai/security-reviewers
+/poetry.lock                       @undercurrentai/security-reviewers
+/tox.ini                           @undercurrentai/security-reviewers
 
 # Root CI / governance config — human-only (closes the root-config fall-through per
 # QG-§54 audit: a .gitignore secret-un-ignore + .afa.yaml gate-config edit must be
 # human-reviewed, not machine-auto-approved). Mirrored in trust_spine_globs.
-/.gitignore                        @ThermoclineLeviathan
-/.afa.yaml                         @ThermoclineLeviathan
-/.markdownlint.json                @ThermoclineLeviathan
+/.gitignore                        @undercurrentai/security-reviewers
+/.afa.yaml                         @undercurrentai/security-reviewers
+/.markdownlint.json                @undercurrentai/security-reviewers
 
 # Test-suite config — controls test SELECTION (markers + addopts). A one-line
 # `addopts = -m "not <marker>"` edit can deselect the entire suite while every
@@ -74,4 +83,4 @@ actions/                           @ThermoclineLeviathan
 # manifests. Mirrored in .aegis-trust-spine-paths.yaml. (Introduced in #36
 # WITHOUT this protection: a PR touching only pytest.ini fell under `*`, where
 # the machine-user IS a code owner, and was auto-approvable — closed here.)
-/pytest.ini                        @ThermoclineLeviathan
+/pytest.ini                        @undercurrentai/security-reviewers

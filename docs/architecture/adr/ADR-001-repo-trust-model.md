@@ -64,7 +64,7 @@ ADR-011 references this repo (`undercurrentai/aegis-policy`) for verifier-policy
 
 Implementation specifics:
 
-- **CODEOWNERS** (`.github/CODEOWNERS`): default `@ThermoclineLeviathan`; explicit listing of `keys/`, `schema/`, `policy/`, `.github/`, `.github/workflows/`, `docs/architecture/`, `scripts/` for visibility. Single owner today + documented growth-path to `@undercurrentai/security-reviewers` 2-of-N team.
+- **CODEOWNERS** (`.github/CODEOWNERS`): default `@ThermoclineLeviathan` (+ the §44 machine-user); explicit listing of `keys/`, `schema/`, `policy/`, `.github/`, `.github/workflows/`, `docs/architecture/`, `scripts/` for visibility. **Addendum 2026-07-29:** the growth path was taken — trust-spine paths are now owned by the team `@undercurrentai/security-reviewers` (id `18755567`, sole member the same single human, so approval semantics are unchanged until a second member joins; the 2-of-N reviewer requirement remains the documented next step). Team-line validity (team existence + write access) is asserted per-PR via the `codeowners/errors` API in the `YAML lint + parse` required check.
 - **Org-level GitHub Ruleset** (Sprint 5/E1.5 admin op): `aegis-policy-critical-checks` requires `lint.yml` + `error-class-parity.yml` + CODEOWNERS approval before merge to `main`; bypass actors empty (admins included).
 - **Consumer SHA-pinning**: per-consumer-repo workflows reference `undercurrentai/aegis-policy@<commit-sha>`, never `@main` or `@v1.0.0` (tags are mutable in some contexts).
 - **AEGIS Stage-2 shadow-eval**: every PR runs `aegis-shadow-eval.yml` advisory workflow that calls `aegis_evaluate_proposal`; decision_id captured in PR body; non-blocking but creates audit trail.

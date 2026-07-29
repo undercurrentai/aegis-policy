@@ -158,9 +158,11 @@ the full repo — don't guess. Specifically:
 
 ## Watch for things that are NOT bugs but look like them
 
-- **`@ThermoclineLeviathan` as sole CODEOWNER** is documented as a growth-path
-  limitation per ADR-001; cosmic-flute §44 retires the bypass-cycle pattern
-  for routine PRs but preserves single-keyholder semantics. NOT a bug.
+- **Trust-spine CODEOWNER is the team `@undercurrentai/security-reviewers`
+  with a single member (`@ThermoclineLeviathan`)** — documented per ADR-001
+  (2026-07-29 addendum); cosmic-flute §44 retires the bypass-cycle pattern
+  for routine PRs but preserves single-keyholder semantics until a second
+  human joins the team. NOT a bug.
 - **§34.17.2 sole-keyholder bypass cycle** has been used 15 cumulative times
   per §43.11 to preserve the §17 Critical 3 invariant. The merge-time bypass
   is a documented compensating control, not a security workaround. NOT a bug.

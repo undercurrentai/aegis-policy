@@ -191,7 +191,7 @@ If a private KMS key version OR the service account `aegis-attestation-signer` i
 
 ## Multi-keyholder growth path
 
-The procedures above assume sole-keyholder per [ADR-001](architecture/adr/ADR-001-repo-trust-model.md). When the team grows beyond one engineer, update CODEOWNERS to require 2-of-N approvals on `keys/` + `schema/` + `policy/` paths (per ADR-001 §"When the team grows"); rotation procedures otherwise unchanged.
+The procedures above assume sole-keyholder per [ADR-001](architecture/adr/ADR-001-repo-trust-model.md). As of 2026-07-29, CODEOWNERS already names the team `@undercurrentai/security-reviewers` on `keys/` + `schema/` + `policy/`; when the team grows beyond one engineer, the steps are (a) add the new human to the team (org settings — no tracked-file edit) and (b) raise `required_approving_review_count` to 2 on those paths in the org ruleset (per ADR-001 §"When the team grows"); rotation procedures otherwise unchanged.
 
 ## References
 

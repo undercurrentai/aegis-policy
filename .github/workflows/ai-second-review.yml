@@ -208,6 +208,12 @@ jobs:
       verdict: ${{ steps.extract.outputs.verdict }}
       max_concern: ${{ steps.extract.outputs.max_concern }}
       diff_empty: ${{ steps.diff.outputs.diff_empty }}
+      # The review step's own outcome, exported so the aggregator can name
+      # the real failure: this job is continue-on-error, so needs.*.result
+      # says success even when the lane died. #35 wired step outcome into
+      # placeholder PROSE only — discarded one step before the aggregator
+      # needed it; this output is the durable wire.
+      step_outcome: ${{ steps.gpt.outcome }}
     steps:
       # === DUAL-CHECKOUT BASE/HEAD per cosmic-flute §45.12.5.1 ===
       # BASE workspace (trusted): scripts + prompts execute from here.
@@ -541,6 +547,12 @@ jobs:
       verdict: ${{ steps.extract.outputs.verdict }}
       max_concern: ${{ steps.extract.outputs.max_concern }}
       diff_empty: ${{ steps.diff.outputs.diff_empty }}
+      # The review step's own outcome, exported so the aggregator can name
+      # the real failure: this job is continue-on-error, so needs.*.result
+      # says success even when the lane died. #35 wired step outcome into
+      # placeholder PROSE only — discarded one step before the aggregator
+      # needed it; this output is the durable wire.
+      step_outcome: ${{ steps.codex.outcome }}
     steps:
       # === DUAL-CHECKOUT BASE/HEAD per cosmic-flute §45.12.5.1 ===
       # Same pattern as gpt-review — see that job for full rationale.
@@ -861,6 +873,12 @@ jobs:
       verdict: ${{ steps.verdict.outputs.verdict }}
       max_concern: ${{ steps.verdict.outputs.max_concern }}
       diff_empty: ${{ steps.diff.outputs.diff_empty }}
+      # The review step's own outcome, exported so the aggregator can name
+      # the real failure: this job is continue-on-error, so needs.*.result
+      # says success even when the lane died. #35 wired step outcome into
+      # placeholder PROSE only — discarded one step before the aggregator
+      # needed it; this output is the durable wire.
+      step_outcome: ${{ steps.claude.outcome }}
     steps:
       # === SINGLE BASE CHECKOUT + OBJECTS-ONLY DIFF (FIX C + §44.23 Option 2) ===
       # FIX C (cosmic-flute §44.22): claude-code-action@v1 exposes NO cwd input AND
@@ -1302,14 +1320,17 @@ jobs:
           GPT_CONCERN: ${{ needs.gpt-review.outputs.max_concern }}
           GPT_EMPTY: ${{ needs.gpt-review.outputs.diff_empty }}
           GPT_RESULT: ${{ needs.gpt-review.result }}
+          GPT_STEP: ${{ needs.gpt-review.outputs.step_outcome }}
           CODEX_VERDICT: ${{ needs.codex-review.outputs.verdict }}
           CODEX_CONCERN: ${{ needs.codex-review.outputs.max_concern }}
           CODEX_EMPTY: ${{ needs.codex-review.outputs.diff_empty }}
           CODEX_RESULT: ${{ needs.codex-review.result }}
+          CODEX_STEP: ${{ needs.codex-review.outputs.step_outcome }}
           CLAUDE_VERDICT: ${{ needs.claude-review.outputs.verdict }}
           CLAUDE_CONCERN: ${{ needs.claude-review.outputs.max_concern }}
           CLAUDE_EMPTY: ${{ needs.claude-review.outputs.diff_empty }}
           CLAUDE_RESULT: ${{ needs.claude-review.result }}
+          CLAUDE_STEP: ${{ needs.claude-review.outputs.step_outcome }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
@@ -1325,13 +1346,16 @@ jobs:
             const reviewers = [
               { name: 'gpt-5.4-pro', verdict: (process.env.GPT_VERDICT || '').toUpperCase(),
                 concern: (process.env.GPT_CONCERN || '').toUpperCase(),
-                empty: process.env.GPT_EMPTY === 'true', result: process.env.GPT_RESULT },
+                empty: process.env.GPT_EMPTY === 'true', result: process.env.GPT_RESULT,
+                stepOutcome: process.env.GPT_STEP },
               { name: 'Codex', verdict: (process.env.CODEX_VERDICT || '').toUpperCase(),
                 concern: (process.env.CODEX_CONCERN || '').toUpperCase(),
-                empty: process.env.CODEX_EMPTY === 'true', result: process.env.CODEX_RESULT },
+                empty: process.env.CODEX_EMPTY === 'true', result: process.env.CODEX_RESULT,
+                stepOutcome: process.env.CODEX_STEP },
               { name: 'Claude', verdict: (process.env.CLAUDE_VERDICT || '').toUpperCase(),
                 concern: (process.env.CLAUDE_CONCERN || '').toUpperCase(),
-                empty: process.env.CLAUDE_EMPTY === 'true', result: process.env.CLAUDE_RESULT },
+                empty: process.env.CLAUDE_EMPTY === 'true', result: process.env.CLAUDE_RESULT,
+                stepOutcome: process.env.CLAUDE_STEP },
             ];
             const KNOWN_CONCERN = new Set(['NONE', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
             const PASS_VERDICT = new Set(['APPROVE', 'COMMENT']);
@@ -1355,10 +1379,32 @@ jobs:
             // §54.5 rule 1: ABSENT → BLOCK. Any reviewer that did not finish
             // cleanly (cancelled / errored / unparseable verdict) → fail-closed.
             // Covers the Claude first-PR-skip degradation (verdict ABSENT).
+            //
+            // The reason string names the REVIEW STEP's own outcome. The jobs
+            // are `continue-on-error: true`, so a lane whose infrastructure
+            // died still reports result=success to needs.* — "absent
+            // (result=success, verdict=<empty>)" told an operator nothing.
+            // Documented cost of that opacity: four consecutive identical
+            // OpenAI-lane failures were read as model noise while the actual
+            // cause — an unfunded platform account — sat unread in the step
+            // log (#35's fix narrative). step_outcome makes the block reason
+            // say WHERE to look. The DECISION is unchanged: still
+            // fail-closed, only the diagnosis improves.
             for (const r of reviewers) {
               if (r.result !== 'success' || !r.verdict) {
+                const step =
+                  r.stepOutcome === 'success'
+                    ? 'review step succeeded but its verdict did not survive extraction — read the extract step log'
+                  : r.stepOutcome === 'skipped'
+                    // The review steps are if:-gated; the usual cause of a
+                    // skip is an EARLIER step in the lane failing (checkout,
+                    // compute-diff). The review step itself has no log then.
+                    ? 'review step was SKIPPED — an earlier step in that lane failed (or its run condition was false); read the earlier steps\' logs'
+                  : r.stepOutcome
+                    ? `review step outcome=${r.stepOutcome} — lane infrastructure failure, not a review verdict; read that step's log`
+                    : 'review step outcome unreported (job cancelled, or output wiring regressed)';
                 return decide('block',
-                  `reviewer ${r.name} absent (result=${r.result || '?'}, verdict=${r.verdict || '<empty>'}) — fail-closed`);
+                  `reviewer ${r.name} absent (result=${r.result || '?'}, verdict=${r.verdict || '<empty>'}; ${step}) — fail-closed`);
               }
             }
 

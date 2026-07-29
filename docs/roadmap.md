@@ -28,21 +28,32 @@ Sprint 5 / E1-E3 + Sprint 6 / F1-F2 + Sprint 7 / G1-G3 of the rigor-aegis-attest
 
 ### Second trust-spine code owner
 
-**Status:** 🔴 OPEN — the durable fix for the §34.17.2 sole-keyholder cycle.
+**Status:** 🟡 STRUCTURALLY READY, waiting on a second human — the CODEOWNERS half is done.
 
-`.github/CODEOWNERS` assigns every trust-spine path (`.github/`, `keys/`, `schema/`, `policy/`,
-`scripts/`, `actions/`, `docs/architecture/`) solely to `@ThermoclineLeviathan`. All three org
-rulesets require code-owner review, `aegis-attestation-required-checks` (`16294975`) has
-`bypass_actors=[]`, and the `@aegis-auto-reviewer` aggregator is designed never to auto-approve a
-trust-spine change. GitHub forbids self-approval, so **the sole code owner cannot merge
-trust-spine work in-band** — which is why the ROADMAP records 29+ cumulative bypass cycles.
+**2026-07-29:** the trust-spine owner in `.github/CODEOWNERS` is now the GitHub Team
+`@undercurrentai/security-reviewers` (org team id `18755567`, seeded with `@ThermoclineLeviathan`
+as sole member/maintainer, write access on this repo — required for a team to be a valid code
+owner). This converts an unbounded series of trust-spine CODEOWNERS edits into exactly the one
+that named the team: **adding a reviewer is now a team-membership change** — an org-settings
+operation touching no tracked file and triggering no ruleset.
 
-The interim procedure is now written down at `docs/operations/trust-spine-break-glass.md`. The
-durable fix is a second human reviewer, or a GitHub Team as code owner so adding someone later
-needs no CODEOWNERS edit.
+Behavior today is UNCHANGED: GitHub forbids self-approval, the team has one member, so the
+§34.17.2 break-glass cycle (written down at `docs/operations/trust-spine-break-glass.md`)
+remains the trust-spine merge path *exactly until a second human joins the team*. That
+membership add is the entire remaining step.
 
-**Ordering trap:** editing `CODEOWNERS` is *itself* a trust-spine change, so the first such edit
-still requires one final break-glass cycle.
+**Decision record — a second self-owned account was REFUSED (2026-07-29).** `Choatek` (Josh's
+own second GitHub account) would mechanically satisfy `require_code_owner_review` and end the
+bypass treadmill overnight — which is exactly why it was rejected: it converts an explicit,
+org-audit-logged, byte-verified, time-boxed procedure into a one-click self-approval that is
+*indistinguishable in the review record from independent review*. The break-glass friction
+honestly reflects a real constraint (one human); a sock-puppet approval would erase the
+constraint from the record without erasing it from reality. Do not rediscover this as an "easy
+win".
+
+**When a second human joins:** add them to `@undercurrentai/security-reviewers` (org settings →
+team members; no PR). Then consider the 2-of-N hardening the CODEOWNERS header documents
+(`required_approving_review_count: 2` on `keys/`, `schema/`, `policy/`).
 
 **Tracking:** `docs/operations/trust-spine-break-glass.md`; cosmic-flute §34.17.2
 
