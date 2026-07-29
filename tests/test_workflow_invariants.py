@@ -822,6 +822,92 @@ class TestRequiredCheckJobsAreTimeBounded:
             )
 
 
+class TestAggregatorAbsentLaneDiagnostics:
+    """A dead reviewer lane must SAY it is dead — with the step's own outcome.
+
+    Reviewer jobs are `continue-on-error: true`, so `needs.*.result` reports
+    success even when the lane's infrastructure died; the old block reason
+    ("absent (result=success, verdict=<empty>)") named nothing. That opacity
+    has a documented cost: four consecutive identical OpenAI-lane failures
+    were read as model noise while the actual cause — an unfunded platform
+    account — sat unread in the step log (#35's fix narrative). #35 wired the
+    step outcome into placeholder PROSE only — one step short of the
+    aggregator. These pins keep the durable wire in place; the decision stays
+    fail-closed, only the diagnosis is load-bearing here.
+    """
+
+    REVIEW_STEP_IDS = {
+        "gpt-review": "gpt",
+        "codex-review": "codex",
+        "claude-review": "claude",
+    }
+
+    def test_lint_workflow_guards_codeowners_validity(self):
+        """Team-based CODEOWNERS lines are enforced only while the team
+        exists and holds write access — org state outside git. If either
+        lapses, GitHub silently falls back to the `*` line (machine-user
+        included). The lint workflow's required job must assert the
+        codeowners/errors API is empty so the downgrade is a red X."""
+        executable = _executable_lines(LINT_WORKFLOW.read_text())
+        assert "codeowners/errors" in executable, (
+            "lint.yml must call repos/{repo}/codeowners/errors — without it, "
+            "team deletion/rename/access-revocation silently hands trust-spine "
+            "ownership to the `*` line."
+        )
+        wf = LINT_WORKFLOW.read_text()
+        assert re.search(r'errors"?\)?\s*\.get\("errors"', wf) or 'get("errors"' in wf, (
+            "the guard must parse the errors array and fail on non-empty"
+        )
+
+    def test_each_reviewer_job_exports_its_review_step_outcome(self):
+        doc = yaml.safe_load(AI_SECOND_REVIEW_WORKFLOW.read_text())
+        for job_name, step_id in self.REVIEW_STEP_IDS.items():
+            outputs = doc["jobs"][job_name].get("outputs", {})
+            expr = outputs.get("step_outcome", "")
+            assert f"steps.{step_id}.outcome" in expr, (
+                f"{job_name} must export step_outcome from its review step "
+                f"(steps.{step_id}.outcome); got {expr!r}. Without it the "
+                f"aggregator is back to 'absent (result=success)' blindness."
+            )
+
+    def test_aggregator_consumes_step_outcome_in_block_reason(self):
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        # Lane identity pinned exactly: cross-wiring (GPT_STEP fed from
+        # claude-review) would report the WRONG lane's outcome — worse than
+        # no diagnosis, because it reads as authoritative.
+        for env_var, job in (
+            ("GPT_STEP", "gpt-review"),
+            ("CODEX_STEP", "codex-review"),
+            ("CLAUDE_STEP", "claude-review"),
+        ):
+            assert re.search(
+                rf"{env_var}: \$\{{\{{ needs\.{job}\.outputs\.step_outcome \}}\}}", wf
+            ), f"aggregator env must wire {env_var} from needs.{job}.outputs.step_outcome exactly"
+        # Pin the actual consumption shape, not a substring: the diagnosis is
+        # derived FROM r.stepOutcome and interpolated INTO the block reason.
+        # (First cut asserted `"r.stepOutcome" in wf`, which a neutering edit
+        # like `false && r.stepOutcome` satisfies — caught by its own
+        # negative control.)
+        assert re.search(
+            r"const step =\s*\n?\s*r\.stepOutcome === 'success'", wf
+        ), (
+            "the aggregator must derive the diagnosis directly from "
+            "r.stepOutcome — exporting the output without reading it "
+            "reintroduces the #35 one-step-short failure."
+        )
+        assert "'skipped'" in wf and "SKIPPED" in wf, (
+            "the diagnosis must handle outcome=skipped distinctly — the "
+            "usual pre-step death (checkout/diff failure) SKIPS the if:-gated "
+            "review step, and pointing the operator at a step with no log is "
+            "a wrong diagnosis delivered confidently."
+        )
+        assert re.search(r"absent \(result=\$\{[^}]+\}, verdict=\$\{[^}]+\}; \$\{step\}\)", wf), (
+            "the block reason must interpolate ${step} — deriving the "
+            "diagnosis and then not printing it is the same one-step-short "
+            "failure in different clothes."
+        )
+
+
 class TestAggregatorRenameCoverage:
     """The trust-spine carve-out must see BOTH sides of a rename.
 

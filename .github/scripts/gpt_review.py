@@ -300,9 +300,10 @@ Watch specifically for:
 
 Watch for things that are NOT bugs but look like them:
 
-    * @ThermoclineLeviathan as sole CODEOWNER is documented per ADR-001
-      growth path; cosmic-flute §44 retires the bypass cycle for routine
-      PRs but preserves single-keyholder semantics.
+    * Trust-spine CODEOWNER is the team @undercurrentai/security-reviewers
+      with a single member (@ThermoclineLeviathan) per ADR-001's 2026-07-29
+      addendum; cosmic-flute §44 retires the bypass cycle for routine
+      PRs but preserves single-keyholder semantics until the team grows.
     * §34.17.2 sole-keyholder bypass cycle has been used 15 cumulative
       times per §43.11 to preserve §17 Critical 3. NOT a bug.
     * scripts/_verify_local_vendored.py contains code that LOOKS LIKE it

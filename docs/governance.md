@@ -4,16 +4,18 @@ Human-readable summary of how this repo is governed. The machine-readable enforc
 
 ## CODEOWNERS
 
-Single owner today: `@ThermoclineLeviathan`. Every change to every path requires owner approval — no exceptions.
+Trust-spine owner: the GitHub Team **`@undercurrentai/security-reviewers`** (org team id `18755567`, created 2026-07-29 — the growth path this section previously documented as "not yet implemented" is now half-taken). Sole member today: `@ThermoclineLeviathan`, so every trust-spine change still requires that one human's approval and — since GitHub forbids self-approval — the §34.17.2 break-glass cycle remains the trust-spine merge path until a second human joins the team. The point of the team indirection: adding that second reviewer is a team-membership change in org settings, touching no tracked file, instead of a CODEOWNERS edit that itself costs a break-glass cycle.
 
-**Stricter paths** (functionally equivalent today since there's a single owner; the explicit listing matters when the team grows):
+**Stricter paths** (functionally equivalent today since the team has a single member; the explicit listing matters when it grows):
 - `keys/` — key rotation, trust-root material
 - `schema/` — vendored upstream contract
 - `policy/` — canonical verifier policy artifact
 - `.github/` — CI workflows + repo metadata
 - `docs/architecture/` — ADRs
 
-**Growth path** (documented commitment, not yet implemented): when a second engineer joins, replace the single owner with a `@undercurrentai/security-reviewers` 2-of-N team and require **2 reviewers** on the strict paths above. The single-owner-today state is acknowledged and not rationalized as adequate long-term.
+**Remaining growth step**: add a second human to `@undercurrentai/security-reviewers`, then require **2 reviewers** on the strict paths above (`required_approving_review_count: 2`). The single-human-today state is acknowledged and not rationalized as adequate long-term; a second self-owned account was considered and refused (see `docs/roadmap.md`).
+
+**Validity dependency, monitored**: team-based CODEOWNERS lines are only enforced while the team exists and holds write access — both org-settings state outside git. If either lapses, GitHub silently stops enforcing those lines and ownership falls back to the `*` default (which includes the machine-user). The `YAML lint + parse` required check therefore asserts the `codeowners/errors` API returns zero errors on every PR, converting that silent downgrade into a red check.
 
 ## PR review requirements
 
@@ -21,7 +23,7 @@ Every PR must:
 1. Pass the `lint.yml` workflow (markdownlint + yamllint + parse-smoke on every YAML)
 2. Run the `aegis-shadow-eval.yml` workflow (advisory; never blocks)
 3. **Pass the `error-class-parity.yml` workflow** if it touches `policy/verifier-policy-v1.yaml` (gating; SDK ↔ policy invariant)
-4. Have CODEOWNERS approval (`@ThermoclineLeviathan`)
+4. Have CODEOWNERS approval (a `@undercurrentai/security-reviewers` member for trust-spine paths; today that is only `@ThermoclineLeviathan`)
 5. Have an AEGIS Stage-2 decision_id captured in the PR body's NIST AI Disclosure section (when AI-assisted)
 6. Use squash-merge (linear history; matches portfolio convention)
 

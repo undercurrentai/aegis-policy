@@ -23,7 +23,9 @@ Three individually-reasonable controls compose into a state where the only code 
 merge a trust-spine change:
 
 1. **`.github/CODEOWNERS`** assigns the trust-spine paths — `.github/`, `keys/`, `schema/`,
-   `policy/`, `scripts/`, `actions/`, `docs/architecture/` — solely to `@ThermoclineLeviathan`.
+   `policy/`, `scripts/`, `actions/`, `docs/architecture/` — to the team
+   `@undercurrentai/security-reviewers`, whose sole member is `@ThermoclineLeviathan`
+   (2026-07-29; before that, the human was named directly — same one approver either way).
 2. **All three org rulesets** set `require_code_owner_review: true` with
    `required_approving_review_count: 1`.
 3. **`aegis-attestation-required-checks`** (org ruleset `16294975`, scoped to this repo by
@@ -37,8 +39,11 @@ code owner has no in-band path to merge.
 This is the same structural shape as the 2026-06/07 outage, where a required check depended on the
 service it governed. Here, the approval requirement depends on a reviewer who cannot exist.
 
-**The real fix is a second human or team code owner** — tracked in `docs/ROADMAP.md`. Until that
-exists, this procedure is the honest interim: explicit, auditable, and reverted immediately.
+**The real fix is a second human.** The *team* half landed 2026-07-29 — the code owner is now
+`@undercurrentai/security-reviewers`, so adding that human is a team-membership change in org
+settings, no CODEOWNERS edit, no bypass cycle (tracked in `docs/roadmap.md`). Until a second
+member exists, this procedure is the honest interim: explicit, auditable, and reverted
+immediately.
 
 ---
 

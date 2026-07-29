@@ -52,6 +52,58 @@ jobs:
           python -m pip check
       - name: Run yamllint
         run: yamllint -d relaxed schema/ policy/ .github/
+
+      - name: CODEOWNERS validity (team lines are only enforced while valid)
+        # The trust-spine CODEOWNERS lines name the team
+        # @undercurrentai/security-reviewers. GitHub enforces a team line only
+        # while the team EXISTS and holds WRITE access — both org-settings
+        # state outside git. If either lapses, those lines silently stop
+        # matching and last-match-wins falls back to the `*` default, which
+        # includes the @aegis-auto-reviewer machine-user — a quiet security
+        # DOWNGRADE with no in-repo signal (v1.4.0 audit). The codeowners/
+        # errors API reports exactly this ("Unknown owner"), so assert it is
+        # empty on the PR's own ref. Fail-closed: an unreachable API fails
+        # the step. This step is part of a REQUIRED check, so the downgrade
+        # becomes a red X instead of a silent state.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          API_URL: ${{ github.api_url }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          # stdlib only — no gh CLI dependency (unproven on these runners),
+          # no pip install (this venv is deliberately lockfile-only).
+          import json, os, sys, urllib.request, urllib.error
+          api, repo, ref = (os.environ["API_URL"], os.environ["REPO"],
+                            os.environ["REF"])
+          req = urllib.request.Request(
+              f"{api}/repos/{repo}/codeowners/errors?ref={ref}",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  errors = json.load(resp).get("errors", [])
+          except Exception as exc:
+              print(f"::error::codeowners/errors API call failed ({exc}) — "
+                    "validity unknown, failing closed")
+              sys.exit(1)
+          if errors:
+              for e in errors:
+                  print(f"::error::CODEOWNERS {e.get('kind')}: "
+                        f"line {e.get('line')}: {e.get('message')}")
+              print("::error::CODEOWNERS has invalid owner lines — team-based "
+                    "trust-spine ownership is NOT being enforced (fallback to "
+                    "the `*` line incl. the machine-user). Fix the team/access "
+                    "in org settings before merging anything.")
+              sys.exit(1)
+          print(f"CODEOWNERS valid at {ref}: 0 errors")
+          PY
       - name: Parse-smoke each YAML
         run: |
           set -euo pipefail
