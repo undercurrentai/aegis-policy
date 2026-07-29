@@ -16,6 +16,8 @@ jobs:
   markdown:
     name: Markdown lint
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Required check (org ruleset 16294975) — bound the billed-runner ceiling.
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -29,6 +31,8 @@ jobs:
   yaml:
     name: YAML lint + parse
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Required check (org ruleset 16294975) — bound the billed-runner ceiling.
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -36,10 +40,16 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.13"
-      - name: Install yamllint + PyYAML
+      - name: Install yamllint + PyYAML (hash-pinned)
+        # requirements-aux-ci.txt is the hash-pinned lockfile for the CI jobs
+        # whose tooling must stay OUT of the test venv — see its header and
+        # requirements-aux.txt. Bare `pip install yamllint pyyaml` was a
+        # latest-version live-PyPI resolution on a REQUIRED check: one bad
+        # upstream release turns every open PR red at once (the
+        # aegis-governance ruff-0.16.0 incident, same class).
         run: |
-          python -m pip install --upgrade pip
-          pip install yamllint pyyaml
+          python -m pip install --no-deps --require-hashes --only-binary=:all: -r requirements-aux-ci.txt
+          python -m pip check
       - name: Run yamllint
         run: yamllint -d relaxed schema/ policy/ .github/
       - name: Parse-smoke each YAML

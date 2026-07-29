@@ -30,6 +30,8 @@ jobs:
     # doesn't permanently block PRs; the ruleset's strict-required-checks
     # policy will still require completion.
     continue-on-error: true
+    # Required check (org ruleset 16294975) — bound the billed-runner ceiling.
+    timeout-minutes: 10
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}  # skip on forks (no secret access)
     steps:
       - name: Checkout
@@ -42,10 +44,14 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install minimal deps
+      - name: Install minimal deps (hash-pinned)
+        # requirements-aux-ci.txt is the hash-pinned lockfile for the CI jobs
+        # whose tooling must stay OUT of the test venv — see its header. Bare
+        # `pip install httpx` was a latest-version live-PyPI resolution on a
+        # REQUIRED check; one bad upstream release reddens every open PR.
         run: |
-          python -m pip install --upgrade pip
-          pip install httpx
+          python -m pip install --no-deps --require-hashes --only-binary=:all: -r requirements-aux-ci.txt
+          python -m pip check
 
       - name: Submit AEGIS Stage-2 evaluation
         env:

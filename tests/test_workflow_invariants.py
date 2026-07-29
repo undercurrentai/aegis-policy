@@ -32,6 +32,59 @@ REUSABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "aegis-verify-attestat
 SELFTEST_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "e3-workflow-selftest.yml"
 AI_SECOND_REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ai-second-review.yml"
 TESTS_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "tests.yml"
+ERROR_CLASS_PARITY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "error-class-parity.yml"
+FINGERPRINT_PARITY_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "fingerprint-parity.yml"
+ENFORCE_CALLER_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "aegis-enforce-caller.yml"
+SHADOW_EVAL_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "aegis-shadow-eval.yml"
+LINT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "lint.yml"
+RESOLVE_CALLEE_PARITY_WORKFLOW = (
+    REPO_ROOT / ".github" / "workflows" / "resolve-callee-parity.yml"
+)
+DEV_REQUIREMENTS = REPO_ROOT / "requirements-dev.txt"
+CI_LOCKFILE = REPO_ROOT / "requirements-ci.txt"
+AUX_REQUIREMENTS = REPO_ROOT / "requirements-aux.txt"
+AUX_LOCKFILE = REPO_ROOT / "requirements-aux-ci.txt"
+
+
+def _executable_lines(text: str) -> str:
+    """Workflow text with comment lines removed.
+
+    Several assertions here prohibit a token whose PRESENCE in a comment is
+    fine (usually the comment explaining why the token is banned). Stripping
+    comment lines first keeps the prohibition aimed at what actually runs.
+    """
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def _lockfile_logical_lines(text: str) -> list[str]:
+    """requirements-ci.txt joined across backslash continuations.
+
+    pip-compile writes one requirement per LOGICAL line:
+
+        cffi==2.1.0 \\
+            --hash=sha256:... \\
+            --hash=sha256:...
+            # via cryptography
+
+    The trailing `# via` annotation is a plain comment line (no continuation
+    reaches it) and is dropped like any other comment.
+    """
+    logical: list[str] = []
+    buf = ""
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        if not buf and (not line.strip() or line.lstrip().startswith("#")):
+            continue
+        if line.endswith("\\"):
+            buf += line[:-1] + " "
+            continue
+        logical.append((buf + line).strip())
+        buf = ""
+    if buf.strip():
+        logical.append(buf.strip())
+    return logical
 
 
 class TestReusableWorkflowF1F2Regression:
@@ -498,4 +551,271 @@ class TestTestsWorkflowInvariants:
         assert "--ignore=tests/" not in wf, (
             "path-based exclusion reintroduces the durability problem; declare "
             "the requirement on the test via the needs_secrets marker instead."
+        )
+
+    def test_matrix_does_not_cancel_siblings(self):
+        """`fail-fast: false` became load-bearing when both matrix legs became
+        required checks (org ruleset 16294975, 2026-07-29). With fail-fast true, a
+        py3.12 failure CANCELS py3.13 on the same head SHA — and a `cancelled`
+        required check blocks the merge while offering nothing to re-read or
+        re-run in place."""
+        doc = yaml.safe_load(TESTS_WORKFLOW.read_text())
+        strategy = doc["jobs"]["pytest"].get("strategy", {})
+        assert strategy.get("fail-fast") is False, (
+            f"tests.yml matrix must set `fail-fast: false` explicitly (the GHA "
+            f"default is true). Got strategy={strategy!r}. Both matrix legs are "
+            f"required checks; letting one cancel the other wedges the PR."
+        )
+
+
+class TestRequiredCheckWorkflowsHaveNoPathsFilter:
+    """Cosmic-flute §48.15 R2, enforced instead of remembered.
+
+    A REQUIRED status check that never reports sits at "Expected" forever and
+    the PR cannot merge. `aegis-enforce-caller.yml` has carried the rule as a
+    comment since §48; the two parity workflows shipped WITH `paths:` filters
+    anyway, which made every PR touching none of the filtered paths
+    structurally unmergeable in-band — verified on #33 and #34 (docs-only) and
+    #35 (workflow files outside the filter), each missing 2 of 5 required
+    checks. That is the second, undiagnosed cause of the 32+ break-glass
+    cycles; the code-owner gap was never the whole story.
+
+    Every workflow feeding a required context in org ruleset 16294975 or
+    17101026 is pinned here: its `pull_request` trigger must be UNFILTERED.
+    """
+
+    REQUIRED_CHECK_WORKFLOWS = [
+        TESTS_WORKFLOW,             # Test suite (py3.12) / (py3.13)   [16294975]
+        ERROR_CLASS_PARITY_WORKFLOW,   # SDK ↔ policy error_class parity  [16294975]
+        FINGERPRINT_PARITY_WORKFLOW,   # keys/ ↔ required_keyids parity   [16294975]
+        SHADOW_EVAL_WORKFLOW,       # AEGIS Shadow Evaluation           [16294975]
+        LINT_WORKFLOW,              # Markdown lint + YAML lint + parse [16294975]
+        ENFORCE_CALLER_WORKFLOW,    # aegis-gate / AEGIS Governance Gate [17101026]
+    ]
+
+    @pytest.mark.parametrize(
+        "wf_path", REQUIRED_CHECK_WORKFLOWS, ids=lambda p: p.name
+    )
+    def test_pull_request_trigger_is_unfiltered(self, wf_path):
+        doc = yaml.safe_load(wf_path.read_text())
+        # YAML 1.1 coerces `on:` → boolean True at top level
+        on_block = doc.get(True) or doc.get("on")
+        assert on_block is not None, f"{wf_path.name}: no trigger block"
+        if isinstance(on_block, list):
+            assert "pull_request" in on_block
+            return  # list form cannot carry filters
+        assert "pull_request" in on_block, f"{wf_path.name}: no pull_request trigger"
+        pr_trigger = on_block["pull_request"] or {}
+        for forbidden in ("paths", "paths-ignore"):
+            assert forbidden not in pr_trigger, (
+                f"{wf_path.name} filters its pull_request trigger with "
+                f"`{forbidden}:`. This workflow feeds a REQUIRED status check; "
+                f"on a PR that matches no path it never reports, the check "
+                f"sits at 'Expected' forever, and the PR is unmergeable "
+                f"in-band (§48.15 R2 — the #33/#34/#35 wedge). Run the job "
+                f"unconditionally; it is cheap and its assertion is a "
+                f"repo-state invariant."
+            )
+
+
+class TestCiInstallsArePinned:
+    """Every CI dependency install is a lockfile, not a live resolution.
+
+    Six workflows install Python packages on `pull_request`. Each must install
+    its hash-pinned lockfile with `--no-deps --require-hashes
+    --only-binary=:all:`, never an open-range requirements file, and never an
+    unpinned `pip install --upgrade pip`. Two failure classes closed: upstream
+    drift (a new release inside an open range adopted by every PR at once —
+    the aegis-governance ruff-0.16.0 incident) and quiet dependency swaps in
+    PRs that look like they touch nothing. `--only-binary` closes a third,
+    subtler one: pip's hash-checking mode accepts a HASHED SDIST when no
+    compatible wheel exists, then fetches its build dependencies from live
+    PyPI unpinned — reproduced during the v1.4.0 audit. See the lockfile
+    headers for what this deliberately does NOT claim to stop (a fork editing
+    a lockfile or workflow itself).
+
+    KNOWN RESIDUAL, deliberate: ai-second-review.yml's reviewer lane installs
+    `openai>=2.11` unpinned. That lane is advisory (`continue-on-error`),
+    feeds no required check, and is rebuilt whenever the OpenAI account is
+    refunded — pin it when it next matters. e2-action-selftest.yml is
+    workflow_dispatch-only (not a PR surface) and is being retired.
+    """
+
+    # (workflow, lockfile it must install)
+    INSTALLING_WORKFLOWS = [
+        (TESTS_WORKFLOW, "requirements-ci.txt"),
+        (ERROR_CLASS_PARITY_WORKFLOW, "requirements-ci.txt"),
+        (FINGERPRINT_PARITY_WORKFLOW, "requirements-ci.txt"),
+        (LINT_WORKFLOW, "requirements-aux-ci.txt"),
+        (SHADOW_EVAL_WORKFLOW, "requirements-aux-ci.txt"),
+        (RESOLVE_CALLEE_PARITY_WORKFLOW, "requirements-aux-ci.txt"),
+    ]
+
+    # (human-readable source, compiled lockfile)
+    LOCKFILE_PAIRS = [
+        (DEV_REQUIREMENTS, CI_LOCKFILE),
+        (AUX_REQUIREMENTS, AUX_LOCKFILE),
+    ]
+
+    @pytest.mark.parametrize(
+        "wf_path,lockfile",
+        INSTALLING_WORKFLOWS,
+        ids=[p.name for p, _ in INSTALLING_WORKFLOWS],
+    )
+    def test_installs_from_hashed_lockfile_only(self, wf_path, lockfile):
+        executable = _executable_lines(wf_path.read_text())
+        assert lockfile in executable, (
+            f"{wf_path.name} must install the hash-pinned {lockfile}"
+        )
+        assert "--require-hashes" in executable, (
+            f"{wf_path.name} must pass --require-hashes so pip verifies "
+            f"artifact digests instead of trusting the index"
+        )
+        assert "--no-deps" in executable, (
+            f"{wf_path.name} must pass --no-deps so pip performs no "
+            f"resolution at all — the lockfile IS the closure"
+        )
+        assert "--only-binary=:all:" in executable, (
+            f"{wf_path.name} must pass --only-binary=:all: — without it, "
+            f"pip's hash-checking mode can fall back to a HASHED SDIST and "
+            f"fetch its build dependencies from live PyPI unpinned "
+            f"(reproduced in the v1.4.0 audit). Wheel-only fails closed."
+        )
+        # Ban the INSTALL of the open-range files, not any mention of them —
+        # the parity workflows legitimately list requirements-dev.txt in
+        # their push `paths:` filters (change-visibility, not execution).
+        assert not re.search(
+            r"(?:-r|--requirement)[=\s]+\S*requirements-(?:dev|aux)\.txt",
+            executable,
+        ), (
+            f"{wf_path.name} installs an open-range requirements SOURCE file "
+            f"(live-PyPI resolution at run time). Install its compiled "
+            f"lockfile instead."
+        )
+        assert not re.search(r"pip install (?:--quiet )?['\"]?[A-Za-z]", executable), (
+            f"{wf_path.name} pip-installs a bare package name — a "
+            f"latest-version live-PyPI resolution. Add it to the appropriate "
+            f"requirements source file and regenerate the lockfile."
+        )
+        assert "--upgrade pip" not in executable, (
+            f"{wf_path.name} upgrades pip from live PyPI — itself an "
+            f"unpinned install of the exact class this step exists to close. "
+            f"The setup-python bundled pip supports --require-hashes."
+        )
+
+    @pytest.mark.parametrize(
+        "source,lockfile",
+        LOCKFILE_PAIRS,
+        ids=[s.name for s, _ in LOCKFILE_PAIRS],
+    )
+    def test_lockfile_covers_every_source_requirement(self, source, lockfile):
+        """Drift guard: the source file is human-readable, the lockfile is
+        compiled FROM it. Editing the source without regenerating would
+        silently ship CI on stale pins; this fails until the two agree
+        (regeneration command in each lockfile's header)."""
+        from packaging.requirements import Requirement
+        from packaging.utils import canonicalize_name
+        from packaging.version import Version
+
+        src_reqs = [
+            Requirement(line.strip())
+            for line in source.read_text().splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ]
+        assert src_reqs, f"{source.name} parsed to zero requirements"
+
+        pins: dict[str, Version] = {}
+        for logical in _lockfile_logical_lines(lockfile.read_text()):
+            m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)", logical)
+            if m:
+                pins[canonicalize_name(m.group(1))] = Version(m.group(2))
+        assert pins, f"{lockfile.name} parsed to zero pins"
+
+        for req in src_reqs:
+            name = canonicalize_name(req.name)
+            assert name in pins, (
+                f"{req.name} is in {source.name} but absent from "
+                f"{lockfile.name} — regenerate the lockfile (command in "
+                f"its header)."
+            )
+            assert str(pins[name]) in req.specifier, (
+                f"{lockfile.name} pins {req.name}=={pins[name]}, outside "
+                f"{source.name}'s range {req.specifier!s} — the two files "
+                f"have drifted; regenerate the lockfile."
+            )
+
+    @pytest.mark.parametrize(
+        "lockfile", [CI_LOCKFILE, AUX_LOCKFILE], ids=lambda p: p.name
+    )
+    def test_every_lockfile_pin_carries_a_hash(self, lockfile):
+        """`--require-hashes` aborts the whole install if ANY requirement
+        lacks a hash — so an unhashed line is not a weaker pin, it is a
+        broken CI install waiting for the next run. Catch it here instead."""
+        unhashed = [
+            logical.split()[0]
+            for logical in _lockfile_logical_lines(lockfile.read_text())
+            if re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]*==", logical)
+            and "--hash=sha256:" not in logical
+        ]
+        assert not unhashed, (
+            f"{lockfile.name} pins without a --hash=sha256 digest: "
+            f"{unhashed}. Regenerate with pip-compile --generate-hashes "
+            f"(command in the lockfile header)."
+        )
+
+
+class TestRequiredCheckJobsAreTimeBounded:
+    """Every required-check job runs on EVERY PR now (the paths filters are
+    gone), so an unbounded hang burns the 360-minute GitHub default on a
+    billed Blacksmith runner per occurrence. tests.yml learned this at #36;
+    the audit found the parity/lint/shadow jobs had not."""
+
+    WORKFLOWS = [
+        TESTS_WORKFLOW,
+        ERROR_CLASS_PARITY_WORKFLOW,
+        FINGERPRINT_PARITY_WORKFLOW,
+        SHADOW_EVAL_WORKFLOW,
+        LINT_WORKFLOW,
+        RESOLVE_CALLEE_PARITY_WORKFLOW,
+    ]
+
+    @pytest.mark.parametrize("wf_path", WORKFLOWS, ids=lambda p: p.name)
+    def test_every_steps_job_sets_timeout_minutes(self, wf_path):
+        doc = yaml.safe_load(wf_path.read_text())
+        for job_name, job in doc["jobs"].items():
+            if "steps" not in job:
+                continue  # reusable-workflow call jobs cannot set timeouts
+            assert "timeout-minutes" in job, (
+                f"{wf_path.name} job {job_name!r} has no timeout-minutes; "
+                f"the default is 360 on a billed runner and this job runs "
+                f"on every PR."
+            )
+
+
+class TestAggregatorRenameCoverage:
+    """The trust-spine carve-out must see BOTH sides of a rename.
+
+    GitHub's listFiles returns a renamed file as ONE entry whose `filename`
+    is the NEW path; the old path is only in `previous_filename`. Mapping
+    only `filename` made the carve-out rename-blind: renaming pytest.ini or
+    a lockfile to an unprotected name matched no glob and fell to the `*`
+    CODEOWNERS line where the machine-user IS a code owner (v1.4.0 audit).
+    The aggregator now flatMaps `previous_filename` into the changed set;
+    this pins that it stays."""
+
+    def test_changed_files_include_previous_filename(self):
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert "previous_filename" in wf, (
+            "ai-second-review.yml's aggregator must include "
+            "f.previous_filename in the changed-files set — without it a "
+            "rename-away of a bare-filename trust-spine entry is invisible "
+            "to the carve-out (layer 1) and lands on the `*` CODEOWNERS "
+            "line (layer 2)."
+        )
+        m = re.search(r"const changed = files\.flatMap\([\s\S]{0,200}?previous_filename", wf)
+        assert m, (
+            "the changed-files mapping must consume previous_filename "
+            "directly (files.flatMap((f) => f.previous_filename ? "
+            "[f.filename, f.previous_filename] : [f.filename])) — a "
+            "comment mentioning it is not the fix."
         )

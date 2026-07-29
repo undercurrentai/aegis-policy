@@ -56,6 +56,14 @@ trust_spine_globs:
   # exists today; the rest are a forward-proof superset (a glob for an absent file
   # never fires until that file is created — harmless).
   - "requirements-dev.txt"
+  # Hash-pinned lockfiles + the aux source — what CI actually installs
+  # (requirements-ci.txt: tests.yml + both parity workflows;
+  # requirements-aux-ci.txt: lint.yml + aegis-shadow-eval.yml +
+  # resolve-callee-parity.yml), so a quiet edit to any of them IS a
+  # dependency swap. Mirrored in .github/CODEOWNERS.
+  - "requirements-ci.txt"
+  - "requirements-aux.txt"
+  - "requirements-aux-ci.txt"
   - "requirements.txt"
   - "pyproject.toml"
   - "Makefile"
@@ -77,11 +85,19 @@ trust_spine_globs:
   - ".afa.yaml"
   - ".markdownlint.json"
 
+  # Test-suite config — controls test SELECTION (pytest markers + addopts). A
+  # one-line `addopts = -m "not <marker>"` edit can deselect the whole suite
+  # with every check green, so it is trust-spine like the dep manifests.
+  # Mirrored in .github/CODEOWNERS. (Introduced in #36 without this protection;
+  # closed here.)
+  - "pytest.ini"
+
 # NOTE: as of cosmic-flute §54 Q2 + the QG-§54 adversarial audit, the carve-out
 # covers: the 6 trust-spine dirs (keys/, schema/, policy/, .github/, docs/architecture/,
 # scripts/) + the verifier-kit composite (actions/**) + this self-protection file +
-# the supply-chain dep/build manifests + root CI/governance config (.gitignore,
-# .afa.yaml, .markdownlint.json) — each mirrored as a human-only entry in
+# the supply-chain dep/build manifests (incl. the requirements-ci.txt lockfile CI
+# installs) + root CI/governance config (.gitignore, .afa.yaml, .markdownlint.json)
+# + test-selection config (pytest.ini) — each mirrored as a human-only entry in
 # .github/CODEOWNERS, keeping the two defense layers in lockstep per §54.9.
 #
 # DELIBERATE risk-acceptance (QG-§54 audit LOW, documented not closed): non-ADR docs

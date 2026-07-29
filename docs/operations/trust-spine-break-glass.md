@@ -119,14 +119,17 @@ for k in ('name','target','enforcement','conditions','rules'):
     print(f'{k:12} {\"unchanged\" if same else \"*** CHANGED ***\"}')
 checks = [c['context'] for r in a['rules'] if r['type']=='required_status_checks'
           for c in r['parameters']['required_status_checks']]
-print('required checks:', len(checks), '(expect 5)')
+print('required checks:', len(checks), '(expect 7 as of 2026-07-29)')
 print('code_owner_review:', [r['parameters'].get('require_code_owner_review')
       for r in a['rules'] if r['type']=='pull_request'])
 "
 ```
 
-All five required checks must survive, and `require_code_owner_review` must still be `true`. You
-are suspending *who may bypass*, not *what is required*.
+Every required check must survive — 7 as of 2026-07-29 (`Test suite (py3.12)` + `Test suite
+(py3.13)` joined the original five). The count moves whenever the required-check set changes, so
+trust the snapshot diff over a remembered number: what matters is that the `rules` field compares
+**unchanged** against your step-1 snapshot, and that `require_code_owner_review` is still `true`.
+You are suspending *who may bypass*, not *what is required*.
 
 ### 4. Merge
 
@@ -198,8 +201,12 @@ cumulative cycle at §48 (2026-05-31).
 
 Most recent: **2026-07-25**, to land `aegis-policy#32` (the availability-vs-verdict gate fix),
 which touched `.github/actions/aegis-gate/` and `.github/workflows/aegis-enforce.yml`. The PR was
-green on all five required checks and unapprovable by its author. Restore verified byte-identical
-to the pre-change snapshot.
+unapprovable by its author and green on the three required checks that reported — the two parity
+checks never ran, because #32's file set matched neither workflow's then-active `paths:` filter.
+(An earlier revision of this paragraph said "green on all five required checks"; that was written
+from memory and is wrong. The never-reporting-required-check wedge it exemplifies was diagnosed
+and fixed on 2026-07-29 — the parity workflows now run on every PR.) Restore verified
+byte-identical to the pre-change snapshot.
 
 That instance is worth keeping in view, because it is the argument for the real fix: **the change
 being blocked was itself the fix for a governance control that had locked a repository.** A

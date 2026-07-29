@@ -41,9 +41,13 @@ actions/                           @ThermoclineLeviathan
 
 # Supply-chain dep files — human-only (cosmic-flute §54 Q2: close the residual
 # auto-approve gap; mirrored in .aegis-trust-spine-paths.yaml trust_spine_globs).
-# requirements-dev.txt exists today; the rest are a forward-proof superset — a
-# CODEOWNERS line for an absent path is harmless (matches nothing until created).
+# requirements-dev.txt and requirements-ci.txt (its hash-pinned lockfile — the
+# file CI actually installs) exist today; the rest are a forward-proof superset —
+# a CODEOWNERS line for an absent path is harmless (matches nothing until created).
 /requirements-dev.txt              @ThermoclineLeviathan
+/requirements-ci.txt               @ThermoclineLeviathan
+/requirements-aux.txt              @ThermoclineLeviathan
+/requirements-aux-ci.txt           @ThermoclineLeviathan
 /requirements.txt                  @ThermoclineLeviathan
 /pyproject.toml                    @ThermoclineLeviathan
 /Makefile                          @ThermoclineLeviathan
@@ -61,3 +65,11 @@ actions/                           @ThermoclineLeviathan
 /.gitignore                        @ThermoclineLeviathan
 /.afa.yaml                         @ThermoclineLeviathan
 /.markdownlint.json                @ThermoclineLeviathan
+
+# Test-suite config — controls test SELECTION (markers + addopts). A one-line
+# `addopts = -m "not <marker>"` edit can deselect the entire suite while every
+# check stays green, so it gets the same human-only treatment as the dep
+# manifests. Mirrored in .aegis-trust-spine-paths.yaml. (Introduced in #36
+# WITHOUT this protection: a PR touching only pytest.ini fell under `*`, where
+# the machine-user IS a code owner, and was auto-approvable — closed here.)
+/pytest.ini                        @ThermoclineLeviathan
