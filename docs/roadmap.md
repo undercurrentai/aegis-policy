@@ -23,6 +23,28 @@ Sprint 5 / E1-E3 + Sprint 6 / F1-F2 + Sprint 7 / G1-G3 of the rigor-aegis-attest
 | **Sprint 7 / G2** | 🟢 GREEN UNBLOCKED — planned | `aegis-gtm` pilot rollout — first non-aegis-governance consumer. Validates verifier-kit ergonomics for the typical Vercel-deployed website. | Separate plan + PR (on `aegis-gtm`); cosmic-flute task #33 |
 | **Sprint 7 / G3** | 🟢 GREEN UNBLOCKED — planned | Roll out to remaining 18 production-bound repos. Tracked via Linear when Step 2 of the operator-OS plan wires Linear webhook. | Linear epic per repo; cosmic-flute task #34 |
 
+## Open — governance
+
+### Second trust-spine code owner
+
+**Status:** 🔴 OPEN — the durable fix for the §34.17.2 sole-keyholder cycle.
+
+`.github/CODEOWNERS` assigns every trust-spine path (`.github/`, `keys/`, `schema/`, `policy/`,
+`scripts/`, `actions/`, `docs/architecture/`) solely to `@ThermoclineLeviathan`. All three org
+rulesets require code-owner review, `aegis-attestation-required-checks` (`16294975`) has
+`bypass_actors=[]`, and the `@aegis-auto-reviewer` aggregator is designed never to auto-approve a
+trust-spine change. GitHub forbids self-approval, so **the sole code owner cannot merge
+trust-spine work in-band** — which is why the ROADMAP records 29+ cumulative bypass cycles.
+
+The interim procedure is now written down at `docs/operations/trust-spine-break-glass.md`. The
+durable fix is a second human reviewer, or a GitHub Team as code owner so adding someone later
+needs no CODEOWNERS edit.
+
+**Ordering trap:** editing `CODEOWNERS` is *itself* a trust-spine change, so the first such edit
+still requires one final break-glass cycle.
+
+**Tracking:** `docs/operations/trust-spine-break-glass.md`; cosmic-flute §34.17.2
+
 ## Phase 2 (post-Sprint 7) — ecosystem-compat
 
 Out of the rigor-aegis-attestations protocol scope; planned for the cosmos-mixing-snuggly successor protocol:
