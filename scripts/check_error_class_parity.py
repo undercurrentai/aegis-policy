@@ -14,14 +14,16 @@ against an unchanged policy.
 
 Closes the manual-audit gap from cosmic-flute §26.11 step 4.
 
-**Vendored source rationale**: aegis-governance is private (BSL-1.1) and
-aegis-governance>=0.5.0 is not yet on PyPI (latest published: 0.4.1). We
-cannot `pip install aegis-governance[verify]>=0.6.1` from any source the CI
-runner can reach without secrets infrastructure. So we vendor
-`_verify_local.py` verbatim into `scripts/_verify_local_vendored.py` and
-read it directly. Drift is caught at refresh time (manual SHA bump in the
-vendored file's header + policy/CHANGELOG.md); the alternative was carrying
-a PAT secret + Git-installer in CI which is more complex than the drift risk.
+**Vendored source rationale**: the AST walk needs the SDK's SOURCE file, not
+an importable module, and this is an ~8s repo-state gate that should not
+carry the SDK's dependency tree (the native liboqs build is minutes on a
+cold runner). So we vendor `_verify_local.py` verbatim into
+`scripts/_verify_local_vendored.py` and read it directly. (An earlier
+version of this docstring justified vendoring by the SDK being private and
+off PyPI; `aegis-governance[verify]` has been on public PyPI since
+2026-05-15 — the calculus above holds regardless.) Drift is caught at
+refresh time (manual SHA bump in the vendored file's header +
+policy/CHANGELOG.md).
 
 Usage:
     pip install -r requirements-dev.txt
@@ -104,8 +106,9 @@ def load_actual_from_sdk() -> set[str]:
     docstring) are ignored — only strings actually returned at runtime count.
 
     Reads from the vendored copy at `scripts/_verify_local_vendored.py` rather
-    than `from aegis import _verify_local` because aegis-governance>=0.5.0 is
-    not yet on PyPI and the source repo is private. See module docstring.
+    than `from aegis import _verify_local` because the AST walk needs source
+    (not an importable module) and an ~8s gate should not install the SDK's
+    native-build dependency tree. See module docstring.
     """
     if not VENDORED_SDK_PATH.exists():
         print(

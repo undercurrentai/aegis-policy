@@ -48,6 +48,8 @@ actions/                           @ThermoclineLeviathan
 /requirements-ci.txt               @ThermoclineLeviathan
 /requirements-aux.txt              @ThermoclineLeviathan
 /requirements-aux-ci.txt           @ThermoclineLeviathan
+/requirements-verify.txt           @ThermoclineLeviathan
+/requirements-verify-ci.txt        @ThermoclineLeviathan
 /requirements.txt                  @ThermoclineLeviathan
 /pyproject.toml                    @ThermoclineLeviathan
 /Makefile                          @ThermoclineLeviathan

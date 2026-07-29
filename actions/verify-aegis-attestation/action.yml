@@ -50,12 +50,12 @@ inputs:
     default: "3.13"
 
   aegis-sdk-version:
-    description: "PyPI version pin for aegis-governance[verify] SDK. Used when aegis-sdk-git-ref is empty. Until AU-N-1 (task #59 PyPI publish) lands, set aegis-sdk-git-ref to a commit SHA instead."
+    description: "PyPI version pin for aegis-governance[verify] SDK. Used when aegis-sdk-git-ref is empty — the DEFAULT install path: aegis-governance[verify] has been on public PyPI since 2026-05-15 (task #59), no secret or Git access needed."
     required: false
     default: "1.0.0"
 
   aegis-sdk-git-ref:
-    description: "Optional Git ref (commit SHA / tag / branch) to install aegis-sdk from. When set, overrides aegis-sdk-version. Format: 'pip install git+https://github.com/undercurrentai/aegis-governance@<ref>#subdirectory=aegis-sdk[verify]'. Requires the consumer workflow to have read access to aegis-governance (private until AU-N-1 lands)."
+    description: "Optional Git ref (commit SHA / tag / branch) to install aegis-sdk from. When set, overrides aegis-sdk-version. Format: 'pip install git+https://github.com/undercurrentai/aegis-governance@<ref>#subdirectory=aegis-sdk[verify]'. Requires read access to that repo at that ref. Historical note: this was the only viable path before the SDK's 2026-05-15 PyPI publish; it remains supported for commit-pinned installs, but the PyPI default is preferred."
     required: false
     default: ""
 

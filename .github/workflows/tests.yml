@@ -4,37 +4,45 @@ name: Tests
 #
 # WHY THIS EXISTS
 # ---------------
-# Before this job, NO workflow ran `tests/`. The only workflow that invoked
-# pytest at all — `e2-action-selftest.yml` — ran a single file
-# (`tests/test_verify_action.py`) and is `workflow_dispatch`-only, because that
-# file needs the private aegis-sdk behind `AEGIS_SDK_FETCH_TOKEN`.
+# Before this workflow, NO workflow ran `tests/`. 90+ tests, including the
+# guard that stops an API key reaching a PUBLIC PR comment
+# (tests/test_gpt_review_failure_detail.py), executed only on whichever laptop
+# happened to run `pytest` by hand. A guard nobody runs is documentation, not
+# enforcement — the same absence-of-signal failure this repo has hit
+# repeatedly.
 #
-# Net effect: 90+ tests, including the guard that stops an API key reaching a
-# PUBLIC PR comment (tests/test_gpt_review_failure_detail.py), executed only on
-# whichever laptop happened to run `pytest` by hand. A guard nobody runs is
-# documentation, not enforcement — the same absence-of-signal failure this repo
-# has hit repeatedly.
+# TWO JOBS, TWO DEPENDENCY SETS
+# -----------------------------
+# `pytest` (matrix, REQUIRED): the fast suite, installed from
+# requirements-ci.txt. Deselects the 19 `needs_aegis_sdk` tests — that venv
+# deliberately excludes the SDK (and httpx/openai) so the deliberate-absence
+# stubs keep their meaning.
 #
-# SCOPE — deliberately secret-free, and what that LEAVES UNGATED
-# --------------------------------------------------------------
-# `tests/test_verify_action.py` is deselected via the `needs_secrets` marker
-# (see pytest.ini). It shells out to `scripts/verify_action.py`, which needs the
-# private aegis-sdk; without the token 18 of its 19 tests fail. Including it
-# would make this job red-by-default on forks — a gate that cannot be green is
-# worse than no gate, because people learn to ignore it.
+# `verifier-kit` (single leg, ADVISORY): runs exactly those 19 tests
+# (tests/test_verify_action.py) against `aegis-governance[verify]==1.0.0`
+# from public PyPI, installed from requirements-verify-ci.txt. They hold the
+# repo's highest-severity assertions — including the guard proving
+# `AEGIS_KEYS_DIR_OVERRIDE`/`AEGIS_POLICY_PATH_OVERRIDE` are ignored unless
+# `AEGIS_INTERNAL_FIXTURE_MODE` is set, the defence against a compromised
+# prior step redirecting the action at attacker-controlled keys.
 #
-# BE PRECISE ABOUT THE RESIDUAL GAP, because a green check invites the opposite
-# assumption: those 19 deselected tests are NOT gated on pull requests. They
-# hold the repo's highest-severity assertions — including the regression guard
-# proving `AEGIS_KEYS_DIR_OVERRIDE`/`AEGIS_POLICY_PATH_OVERRIDE` are ignored
-# unless `AEGIS_INTERNAL_FIXTURE_MODE` is set, i.e. the defence against a
-# compromised prior step redirecting the action at attacker-controlled keys.
-# Their only home is `e2-action-selftest.yml`, which is workflow_dispatch-only
-# and needs an admin-configured secret. Manual dispatch is not coverage. Closing
-# that is tracked separately; do not read this check as covering it.
+# HISTORY, because the old premise died quietly: the #36 version of this
+# header said those 19 tests "need the private aegis-sdk behind
+# AEGIS_SDK_FETCH_TOKEN" and could only run in workflow_dispatch-only
+# e2-action-selftest.yml. False on three counts by then: the SDK has been on
+# public PyPI since 2026-05-15 (roadmap task #59), that secret has never
+# existed in this repo, and e2-action-selftest.yml had zero runs ever. The
+# marker was accordingly renamed needs_secrets → needs_aegis_sdk: the
+# dependency was never a secret, it was a package, and it stopped being
+# private.
+#
+# ADVISORY STATUS of verifier-kit, stated plainly: its check is NOT in org
+# ruleset 16294975 yet. Promotion after ~2 weeks of run history is tracked in
+# docs/roadmap.md. Until then a red verifier-kit does not block a merge — do
+# not read the required-set green as covering these 19 tests.
 #
 # Measured on a clean venv (requirements-ci.txt only, no httpx/openai/aegis-sdk):
-# 122 passed, 19 deselected, 0 skipped (2026-07-29 — was "92 passed" at #36,
+# 124 passed, 19 deselected, 0 skipped (2026-07-29 — was "92 passed" at #36,
 # which was already stale by six invariant tests the moment it merged; treat
 # this line as a rough scale marker, not a pinned count).
 
@@ -106,12 +114,12 @@ jobs:
           python -m pip check
 
       - name: Run test suite
-        # `-m "not needs_secrets"`, not `--ignore=<path>`: the exclusion is a
+        # `-m "not needs_aegis_sdk"`, not `--ignore=<path>`: the exclusion is a
         # capability statement that belongs next to the test (pytest.ini), so a
-        # future secrets-needing file degrades gracefully instead of turning
+        # future SDK-needing file degrades gracefully instead of turning
         # this job red until someone edits the workflow.
         run: |
-          pytest tests/ -m "not needs_secrets" -q --tb=short \
+          pytest tests/ -m "not needs_aegis_sdk" -q --tb=short \
             --junitxml=pytest-report.xml
 
       - name: Assert the security guard actually EXECUTED
@@ -167,5 +175,116 @@ jobs:
                     f"({len(cases) - len(executed)} skipped or absent). The "
                     "API-key redaction guard did not run — do NOT merge on a "
                     "green suite alone.")
+              sys.exit(1)
+          PY
+
+  verifier-kit:
+    # ADVISORY (not in org ruleset 16294975 yet — promotion after ~2 weeks of
+    # run history, tracked in docs/roadmap.md). The check name deliberately
+    # carries NO "(advisory)" suffix: renaming a check when it is promoted is
+    # exactly the mismatch that blocked PR #5 ("AEGIS Shadow Evaluation
+    # (advisory)" vs the ruleset's entry); name it once, promote it unchanged.
+    name: Verifier kit (py3.13)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Cold path CMake-builds the native liboqs library at first `import oqs`
+    # (minutes); the warm path restores it from cache and the pytest run
+    # itself is ~3s. Generous ceiling, still far under the billed 360 default.
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: "3.13"
+
+      - name: Restore liboqs native library
+        # liboqs-python's wheel is pure Python; the C library it wraps is
+        # auto-built into ~/_oqs at first import. Keyed on the lockfile hash
+        # so an SDK/wrapper bump invalidates the cache. Deliberately NO
+        # restore-keys: a prefix restore could resurrect a stale ~/_oqs
+        # across wrapper bumps — exact-key-or-cold-build only.
+        #
+        # restore/save are SPLIT (not the combined actions/cache) because the
+        # combined action saves only when the whole job SUCCEEDS — a red test
+        # run or a cancel-in-progress would discard the multi-minute build on
+        # exactly the PRs that iterate. The save step below runs right after
+        # the build instead.
+        id: liboqs-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/_oqs
+          key: liboqs-${{ runner.os }}-${{ hashFiles('requirements-verify-ci.txt') }}
+
+      - name: Install verifier kit (hash-pinned)
+        # requirements-verify-ci.txt pins aegis-governance[verify]==1.0.0 —
+        # public PyPI, the exact version action.yml defaults to and the
+        # committed fixtures are proven against. See the lockfile header.
+        run: |
+          python -m pip install --no-deps --require-hashes --only-binary=:all: -r requirements-verify-ci.txt
+          python -m pip check
+
+      - name: Build or restore liboqs
+        # Its own step so the cold-build cost is visible and a native-build
+        # failure is distinguishable from a test failure.
+        run: python -c "import oqs; print('liboqs ready:', oqs.oqs_version())"
+
+      - name: Save liboqs native library
+        # Immediately after the build, BEFORE the tests: a completed native
+        # build persists even when a test later fails. Skipped on cache hit.
+        if: steps.liboqs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/_oqs
+          key: liboqs-${{ runner.os }}-${{ hashFiles('requirements-verify-ci.txt') }}
+
+      - name: Run the verifier-kit tests
+        # Selected by capability marker, mirroring the matrix job's deselect:
+        # the two jobs partition the suite exactly, nothing runs zero times.
+        run: |
+          pytest tests/ -m needs_aegis_sdk -q --tb=short \
+            --junitxml=pytest-verify-report.xml
+
+      - name: Assert the verifier-kit tests actually EXECUTED
+        # Same defence as the matrix job's guard step, same reason: a
+        # module-level skip (or a marker/selection drift) yields exit 0 and a
+        # green job while the 19 highest-severity tests run zero times.
+        # Reads the JUnit XML the step above itself produced — executed, not
+        # collected. `if: always()` so a red suite still reports guard status.
+        if: always()
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+
+          TARGET, MINIMUM = "test_verify_action", 19
+          try:
+              raw = open("pytest-verify-report.xml", "rb").read()
+              # Fork-authored code produced this report — treat as untrusted.
+              # pytest never emits a DTD; reject one outright, fail-closed.
+              if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+                  print("::error::pytest-verify-report.xml contains a DTD; "
+                        "pytest never emits one. Refusing to parse.")
+                  sys.exit(1)
+              root = ET.fromstring(raw)
+          except SystemExit:
+              raise
+          except Exception as exc:
+              print(f"::error::cannot read pytest-verify-report.xml ({exc}) "
+                    "— guard status unknown, failing closed")
+              sys.exit(1)
+
+          cases = [tc for tc in root.iter("testcase")
+                   if TARGET in (tc.get("classname") or "")]
+          executed = [tc for tc in cases if tc.find("skipped") is None]
+          print(f"verifier-kit tests: collected={len(cases)} "
+                f"executed={len(executed)}")
+
+          if len(executed) < MINIMUM:
+              print(f"::error::Expected >={MINIMUM} EXECUTED tests in "
+                    f"tests/{TARGET}.py; got {len(executed)} "
+                    f"({len(cases) - len(executed)} skipped or absent). The "
+                    "AEGIS_KEYS_DIR_OVERRIDE redirection guard did not run.")
               sys.exit(1)
           PY

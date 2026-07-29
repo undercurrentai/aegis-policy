@@ -2,7 +2,7 @@
 
 These tests guard against /quality-gate Phase 2 bug-hunt findings (F1+F2+F4)
 recurring silently. They parse the YAML statically rather than running the
-workflows (which requires GitHub Actions + AEGIS_SDK_FETCH_TOKEN).
+workflows (which would require a live GitHub Actions run).
 
 Findings caught:
 
@@ -44,6 +44,8 @@ DEV_REQUIREMENTS = REPO_ROOT / "requirements-dev.txt"
 CI_LOCKFILE = REPO_ROOT / "requirements-ci.txt"
 AUX_REQUIREMENTS = REPO_ROOT / "requirements-aux.txt"
 AUX_LOCKFILE = REPO_ROOT / "requirements-aux-ci.txt"
+VERIFY_REQUIREMENTS = REPO_ROOT / "requirements-verify.txt"
+VERIFY_LOCKFILE = REPO_ROOT / "requirements-verify-ci.txt"
 
 
 def _executable_lines(text: str) -> str:
@@ -539,18 +541,43 @@ class TestTestsWorkflowInvariants:
             "walks straight through it again."
         )
 
-    def test_secrets_needing_tests_are_deselected_by_marker(self):
-        """`--ignore=<path>` was replaced by a capability marker.
+    def test_sdk_needing_tests_are_partitioned_by_marker(self):
+        """`--ignore=<path>` was replaced by a capability marker, and the two
+        jobs must PARTITION the suite on it exactly.
 
-        A path exclusion makes the NEXT secrets-needing test file turn this job
-        red-by-default, with the fix living in a workflow its author had no
-        reason to open.
+        A path exclusion makes the NEXT SDK-needing test file turn the matrix
+        job red-by-default, with the fix living in a workflow its author had
+        no reason to open. And if the matrix deselect and the verifier-kit
+        select ever use different marker expressions, tests fall in the gap
+        and run zero times — the pre-#36 state, quietly reintroduced.
+
+        (The marker was `needs_secrets` until 2026-07-29; renamed because the
+        SDK has been public PyPI since 2026-05-15 and the secret it named
+        never existed.)
         """
-        wf = TESTS_WORKFLOW.read_text()
-        assert 'not needs_secrets' in wf
-        assert "--ignore=tests/" not in wf, (
+        # ALL assertions run comment-stripped — positives included. The
+        # workflow's comments legitimately quote both marker expressions
+        # (v1.4.0 audit reproduced this: with only the raw-text positives, a
+        # deleted run line plus a surviving comment kept this test green
+        # while the 19 highest-severity tests ran zero times, silently).
+        executable = _executable_lines(TESTS_WORKFLOW.read_text())
+        assert '-m "not needs_aegis_sdk"' in executable, (
+            "the matrix job must deselect exactly the needs_aegis_sdk marker "
+            "on an EXECUTABLE line (a comment quoting it does not count)"
+        )
+        assert re.search(r"-m needs_aegis_sdk\b", executable), (
+            "the verifier-kit job must select exactly the needs_aegis_sdk "
+            "marker on an EXECUTABLE line — the complement of the matrix "
+            "deselect, so the two jobs partition the suite and nothing runs "
+            "zero times"
+        )
+        assert "needs_secrets" not in executable, (
+            "the retired marker name reasserts a false premise (a secret "
+            "that never existed); use needs_aegis_sdk"
+        )
+        assert "--ignore=tests/" not in executable, (
             "path-based exclusion reintroduces the durability problem; declare "
-            "the requirement on the test via the needs_secrets marker instead."
+            "the requirement on the test via the needs_aegis_sdk marker instead."
         )
 
     def test_matrix_does_not_cancel_siblings(self):
@@ -655,6 +682,7 @@ class TestCiInstallsArePinned:
     LOCKFILE_PAIRS = [
         (DEV_REQUIREMENTS, CI_LOCKFILE),
         (AUX_REQUIREMENTS, AUX_LOCKFILE),
+        (VERIFY_REQUIREMENTS, VERIFY_LOCKFILE),
     ]
 
     @pytest.mark.parametrize(
@@ -685,7 +713,7 @@ class TestCiInstallsArePinned:
         # the parity workflows legitimately list requirements-dev.txt in
         # their push `paths:` filters (change-visibility, not execution).
         assert not re.search(
-            r"(?:-r|--requirement)[=\s]+\S*requirements-(?:dev|aux)\.txt",
+            r"(?:-r|--requirement)[=\s]+\S*requirements-(?:dev|aux|verify)\.txt",
             executable,
         ), (
             f"{wf_path.name} installs an open-range requirements SOURCE file "
@@ -745,7 +773,9 @@ class TestCiInstallsArePinned:
             )
 
     @pytest.mark.parametrize(
-        "lockfile", [CI_LOCKFILE, AUX_LOCKFILE], ids=lambda p: p.name
+        "lockfile",
+        [CI_LOCKFILE, AUX_LOCKFILE, VERIFY_LOCKFILE],
+        ids=lambda p: p.name,
     )
     def test_every_lockfile_pin_carries_a_hash(self, lockfile):
         """`--require-hashes` aborts the whole install if ANY requirement

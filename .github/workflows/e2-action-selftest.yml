@@ -2,34 +2,25 @@ name: E2 Action Self-Test
 
 # Sprint 5/E2 self-test workflow for actions/verify-aegis-attestation/action.yml.
 #
-# Two layers:
-#   1. unit-tests job — runs tests/test_verify_action.py against fixtures; exercises
-#      scripts/verify_action.py end-to-end as subprocess. Catches script regressions
-#      without depending on GitHub Actions composite-step plumbing.
-#   2. action-invocation jobs (4) — invoke the composite action via `uses: ./actions/...`,
-#      exercising the action.yml inputs/outputs/composite-step machinery. Validates
-#      that the action's wire format matches verify_action.py's expectations.
+# One layer remains: the 4 action-invocation jobs invoke the composite action
+# via `uses: ./actions/...`, exercising action.yml's inputs/outputs/
+# composite-step machinery — the wire format the unit tests cannot see. (The
+# former `unit-tests` job was superseded 2026-07-29: tests/test_verify_action.py
+# now runs on every PR in tests.yml's `verifier-kit` job.)
 #
-# Trigger: `workflow_dispatch:` only at v1.1.0 ship.
-#
-# **Why not pull_request: yet?** Both layers need aegis-sdk[verify] installed in CI.
-# aegis-sdk 1.0.0 is not on PyPI as of 2026-05-13 (tracked in cosmic-flute as task #59
-# AU-N-1). Until then, install requires fetching from `git+https://github.com/
-# undercurrentai/aegis-governance@dc9c9df#subdirectory=aegis-sdk[verify]`, which
-# requires read access to a private repo. The default GITHUB_TOKEN does not have
-# cross-repo access; a PAT secret (AEGIS_SDK_FETCH_TOKEN) must be configured first.
-#
-# **Activation path post-task-#59 ship**:
-#   1. Once aegis-governance[verify] is on PyPI, drop the `aegis-sdk-git-ref`
-#      input from the action-invocation jobs (PyPI install becomes default).
-#   2. Add `pull_request:` trigger here with paths filter matching action.yml,
-#      verify_action.py, fixtures, this workflow file, policy/verifier-policy-v1.yaml,
-#      and keys/.
-#   3. Add this workflow's check name (`E2 Action Self-Test / unit-tests`) to the
-#      org-Ruleset `aegis-attestation-required-checks` (Sprint 5/E1.5 Phase 7
-#      configured this ruleset; see cosmic-flute §28.3 Phase 7).
-#
-# Until then, run manually via:
+# SDK install: action.yml's default — aegis-governance[verify]==1.0.0 from
+# PUBLIC PyPI (task #59 shipped 2026-05-15). The former `aegis-sdk-git-ref:
+# dc9c9df` pins + AEGIS_SDK_FETCH_TOKEN machinery dated from when the SDK was
+# private. That secret was never configured in this repo and this workflow had
+# ZERO runs ever — as written, it could not have run. It can now: of the old
+# header's three-step activation plan (1: PyPI default; 2: pull_request
+# trigger; 3: ruleset entry), step 1 is done here and steps 2–3 are
+# deliberately NOT taken, by cost not necessity — each of
+# the 4 jobs cold-builds the native liboqs library inside the composite (no
+# cache at the composite layer), minutes on a billed runner, ×4, and the unit
+# layer already covers the verification logic on every PR. This layer is
+# on-demand validation of the composite plumbing; run it after editing
+# action.yml:
 #   gh workflow run e2-action-selftest.yml --repo undercurrentai/aegis-policy
 
 on:
@@ -39,43 +30,12 @@ permissions:
   contents: read
 
 jobs:
-  unit-tests:
-    name: Unit tests (tests/test_verify_action.py)
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
-        with:
-          python-version: "3.13"
-
-      - name: Install aegis-sdk[verify] + dev deps
-        # Until task #59 PyPI publish: fetches aegis-governance@dc9c9df via the
-        # AEGIS_SDK_FETCH_TOKEN secret (a PAT with read access to private
-        # undercurrentai/aegis-governance). The token IS NOT required at PR time
-        # because this workflow is workflow_dispatch-only; admin sets the secret
-        # in repo settings before invoking.
-        env:
-          AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          pip install pytest pyyaml
-          if [[ -n "${AEGIS_SDK_FETCH_TOKEN}" ]]; then
-            pip install "git+https://${AEGIS_SDK_FETCH_TOKEN}@github.com/undercurrentai/aegis-governance@dc9c9df#subdirectory=aegis-sdk[verify]"
-          else
-            echo "::error::AEGIS_SDK_FETCH_TOKEN secret not set; cannot install aegis-sdk from private repo. See workflow header comment for activation steps."
-            exit 1
-          fi
-
-      - name: Run unit tests
-        run: pytest tests/test_verify_action.py -v --tb=short
-
   action-invocation-happy-path:
     name: Composite action — happy path
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Each invocation cold-builds liboqs inside the composite (network
+    # clone + cmake) — bound it; the billed default is 360 minutes.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -88,9 +48,17 @@ jobs:
           expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
           expected-environment: "preview"
           replay-store-path: ".aegis-replay-happy.log"
-          aegis-sdk-git-ref: dc9c9df
         env:
-          # Self-test override: point action at test fixtures instead of production keys/policy
+          # Self-test override: point action at test fixtures instead of
+          # production keys/policy. AEGIS_INTERNAL_FIXTURE_MODE=1 is the
+          # sentinel that ENABLES the override vars (scripts/verify_action.py::
+          # _fixture_mode_enabled). The Phase-3 remediation that introduced the
+          # sentinel added it to the other three jobs but missed this one —
+          # without it the overrides are (correctly) ignored, the fixture
+          # envelope is checked against PRODUCTION keys, and this job can never
+          # pass. Latent since then because the workflow had zero runs; found
+          # 2026-07-29 when it became runnable.
+          AEGIS_INTERNAL_FIXTURE_MODE: "1"
           AEGIS_KEYS_DIR_OVERRIDE: tests/fixtures/test-keys
           AEGIS_POLICY_PATH_OVERRIDE: tests/fixtures/policy-test-v1.yaml
 
@@ -108,6 +76,9 @@ jobs:
   action-invocation-tampered-digest:
     name: Composite action — tampered digest
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Each invocation cold-builds liboqs inside the composite (network
+    # clone + cmake) — bound it; the billed default is 360 minutes.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -120,7 +91,6 @@ jobs:
           envelope: "@tests/fixtures/envelope-tampered-digest.json"
           expected-digest: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
           expected-environment: "preview"
-          aegis-sdk-git-ref: dc9c9df
         env:
           # AEGIS_INTERNAL_FIXTURE_MODE=1 is the sentinel that enables the OVERRIDE
           # env vars (scripts/verify_action.py::_fixture_mode_enabled — Phase 3
@@ -138,6 +108,9 @@ jobs:
   action-invocation-expired:
     name: Composite action — expired envelope
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Each invocation cold-builds liboqs inside the composite (network
+    # clone + cmake) — bound it; the billed default is 360 minutes.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -150,7 +123,6 @@ jobs:
           envelope: "@tests/fixtures/envelope-expired.json"
           expected-digest: "1ff5ccc05032641ada6f8a57995e2184e4da9f21672879fdaca61ba8b71e2bb5"
           expected-environment: "preview"
-          aegis-sdk-git-ref: dc9c9df
         env:
           # AEGIS_INTERNAL_FIXTURE_MODE=1 is the sentinel that enables the OVERRIDE
           # env vars (scripts/verify_action.py::_fixture_mode_enabled — Phase 3
@@ -168,6 +140,9 @@ jobs:
   action-invocation-replay-detected:
     name: Composite action — replay detection
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Each invocation cold-builds liboqs inside the composite (network
+    # clone + cmake) — bound it; the billed default is 360 minutes.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -180,7 +155,6 @@ jobs:
           expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
           expected-environment: "preview"
           replay-store-path: ".aegis-replay-test.log"
-          aegis-sdk-git-ref: dc9c9df
         env:
           # AEGIS_INTERNAL_FIXTURE_MODE=1 is the sentinel that enables the OVERRIDE
           # env vars (scripts/verify_action.py::_fixture_mode_enabled — Phase 3
@@ -198,7 +172,6 @@ jobs:
           expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
           expected-environment: "preview"
           replay-store-path: ".aegis-replay-test.log"
-          aegis-sdk-git-ref: dc9c9df
         env:
           # AEGIS_INTERNAL_FIXTURE_MODE=1 is the sentinel that enables the OVERRIDE
           # env vars (scripts/verify_action.py::_fixture_mode_enabled — Phase 3

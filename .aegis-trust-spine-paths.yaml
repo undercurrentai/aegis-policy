@@ -64,6 +64,8 @@ trust_spine_globs:
   - "requirements-ci.txt"
   - "requirements-aux.txt"
   - "requirements-aux-ci.txt"
+  - "requirements-verify.txt"
+  - "requirements-verify-ci.txt"
   - "requirements.txt"
   - "pyproject.toml"
   - "Makefile"

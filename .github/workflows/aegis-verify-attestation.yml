@@ -80,7 +80,7 @@ on:
         type: string
         default: "1.0.0"
       aegis-sdk-git-ref:
-        description: "Optional Git ref (commit SHA / tag / branch) for aegis-sdk install via Git. When set, overrides aegis-sdk-version. Requires AEGIS_SDK_FETCH_TOKEN secret if aegis-governance is private."
+        description: "Optional Git ref (commit SHA / tag / branch) for aegis-sdk install via Git. When set, overrides aegis-sdk-version; requires the AEGIS_SDK_FETCH_TOKEN secret only if fetching that ref needs auth. The default PyPI path needs no secret — aegis-governance[verify] is public PyPI since 2026-05-15 (task #59)."
         required: false
         type: string
         default: ""
