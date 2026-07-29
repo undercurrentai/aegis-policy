@@ -81,23 +81,45 @@ if TYPE_CHECKING:
 # Sanitize exception strings before logging — strips OpenAI/Bearer tokens
 # that could leak via str(exc) in older SDK versions or wrapped chains.
 _SECRET_PATTERNS = (
+    # MASKED OpenAI key — MUST precede the unmasked rule. This is the shape the
+    # docstring below cites, and the original `sk-[A-Za-z0-9_-]{16,}` could not
+    # match it: `*` and `.` are outside that character class, so the match died
+    # after 5 chars and never reached the {16,} floor. Verified against the real
+    # message text: "Incorrect API key provided: sk-pr***…***dEfA" leaked in full.
+    re.compile(r"sk-[A-Za-z0-9_-]*[*.…]{3,}[A-Za-z0-9_-]*"),
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
     re.compile(r"Bearer\s+[A-Za-z0-9_.\-]{16,}", re.IGNORECASE),
+    # Other credential shapes reachable from an OpenAI error, an AEGIS 401, or
+    # a diff line the model quotes back (SYSTEM_PROMPT tells it to cite
+    # file:line evidence, and names "secret leak" as a CRITICAL finding class —
+    # so quoting a leaked credential is the model's *expected* behavior).
+    re.compile(r"org-[A-Za-z0-9]{16,}"),
+    re.compile(r"proj_[A-Za-z0-9]{16,}"),
+    re.compile(r"uk_[A-Za-z0-9_]{16,}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{16,}"),
+    re.compile(r"github_pat_[A-Za-z0-9_]{16,}"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
 )
+
+# Credentials embedded in a URL userinfo section. Separate from the tuple above
+# because the substitution must preserve the surrounding "://" and "@".
+_URL_CREDENTIAL_PATTERN = re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+(?=@)")
 
 
 def _safe_text(text: str) -> str:
     """Strip API-key-shaped substrings from any text bound for a public surface.
 
-    Every `_write_fallback` reason is rendered into `gpt_review.md`, which is
-    posted verbatim as a PR comment on a PUBLIC repository. Anything reaching
-    that path must be sanitized, not just exception strings — API-sourced error
-    messages qualify (OpenAI echoes a partially-masked key in some auth errors,
-    e.g. "Incorrect API key provided: sk-...").
+    `gpt_review.md` is posted verbatim as a PR comment on a PUBLIC repository,
+    so BOTH paths that write it must be sanitized: the `_write_fallback` reason
+    AND the success path's model output. The success path carries far more text
+    and is the one directed to quote the diff, so it is the larger exposure.
+
+    API-sourced error messages qualify: OpenAI echoes a partially-masked key in
+    some auth errors, e.g. "Incorrect API key provided: sk-pr****dEfA".
     """
     for pat in _SECRET_PATTERNS:
         text = pat.sub("<redacted-secret>", text)
-    return text
+    return _URL_CREDENTIAL_PATTERN.sub("<redacted-secret>", text)
 
 
 def _safe_exc(exc: BaseException) -> str:
@@ -656,7 +678,12 @@ def _main_impl(args: argparse.Namespace) -> int:
         sys.stderr.write("gpt_review: empty output\n")
         return 6
 
-    args.output.write_text(markdown + "\n", encoding="utf-8")
+    # Sanitize the SUCCESS path too, not just the fallback reasons. This file is
+    # posted verbatim as a PR comment on a PUBLIC repo, and SYSTEM_PROMPT directs
+    # the model to cite file:line evidence from the diff — so a PR that leaks a
+    # credential (exactly what this reviewer exists to catch) would otherwise get
+    # that credential republished by the reviewer's own comment.
+    args.output.write_text(_safe_text(markdown) + "\n", encoding="utf-8")
     sys.stderr.write(
         f"gpt_review: wrote {len(markdown)} chars to {args.output}\n"
     )

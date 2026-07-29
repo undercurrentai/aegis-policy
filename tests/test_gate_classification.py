@@ -50,11 +50,21 @@ def classify(curl_rc: str, http_code: str, canonical: str = "true") -> str:
             "CURL_RC": curl_rc,
             "HTTP_CODE": http_code,
             "CANONICAL_HOST": canonical,
+            # Deliberately narrower than the real Actions PATH. classify.sh must
+            # depend only on bash builtins plus `grep`, both Priority-required
+            # on ubuntu-2404. A future edit reaching for a tool-cache binary
+            # should fail HERE rather than in production.
             "PATH": "/usr/bin:/bin",
         },
         capture_output=True,
         text=True,
         check=False,
+        # This helper runs 2800 times in TestTotalFunctionSweep and is now on
+        # the critical path of every PR. Without `timeout` an edit that makes
+        # classify.sh read stdin would hang the job to its ceiling; without
+        # `stdin=DEVNULL` bash inherits the parent's stdin and does exactly that.
+        timeout=10,
+        stdin=subprocess.DEVNULL,
     )
     assert proc.returncode == 0, f"classifier exited {proc.returncode}: {proc.stderr}"
     return proc.stdout.strip()
@@ -191,7 +201,12 @@ class TestAntiTier2:
     ) -> None:
         for path in self._gate_dir().iterdir():
             if path.is_file():
-                assert forbidden not in path.read_text(encoding="utf-8"), (
+                # errors="replace": this walks whatever is in the directory, so
+                # a stray non-UTF-8 file (a macOS .DS_Store) would otherwise
+                # raise UnicodeDecodeError — red locally, green in CI, which is
+                # the wrong direction for a security assertion.
+                text = path.read_text(encoding="utf-8", errors="replace")
+                assert forbidden not in text, (
                     f"{path.name} contains {forbidden!r} — the gate must not "
                     "execute or evaluate code from the repo under review"
                 )

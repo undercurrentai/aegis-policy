@@ -17,23 +17,66 @@ was real, not theoretical.
 
 These tests pin the property so it cannot silently regress.
 
-SCOPE NOTE (honest): no CI job currently runs the full `tests/` directory — only
-`e2-action-selftest.yml` runs a single file, and it is `workflow_dispatch`-only.
-These therefore guard local `pytest tests/` runs and document the invariant; they
-do not gate CI today. Wiring a full-suite job is tracked separately.
+ENFORCEMENT: `.github/workflows/tests.yml` runs this file on every PR, so the
+property is gated rather than merely documented. That job was added in the same
+change — before it existed, the only workflow touching `tests/` ran a single
+different file and was `workflow_dispatch`-only, which made every test here
+decorative.
 """
 
 from __future__ import annotations
 
+import importlib.machinery
 import importlib.util
 import re
+import sys
+import types
 from pathlib import Path
 
 import pytest
 
-# gpt_review.py imports httpx at module level. Skip rather than fail the whole
-# file if the environment lacks it — several CI jobs install only pyyaml.
-pytest.importorskip("httpx", reason="gpt_review.py imports httpx at module scope")
+# These assertions MUST run in every environment.
+#
+# The first version of this file used `pytest.importorskip("httpx")`, because
+# gpt_review.py does `import httpx` at module scope. Verified in a clean venv:
+# that made all 13 assertions SKIP while the run still reported success — a
+# security guard that silently disappears is indistinguishable from one that
+# passes, which is the exact failure class these tests exist to prevent.
+#
+# Worse, the module `sys.exit(2)`s when `openai` is missing (see its import
+# block), so a bare environment would abort collection outright rather than skip.
+#
+# Neither dependency is reachable from the functions under test — `_safe_text`
+# and `_failure_detail` are pure. So stub whatever is genuinely absent and load
+# the module regardless. Real packages are preferred when present; the stub only
+# fills a gap. Result: the guard cannot be silenced by an environment change.
+def _ensure_module(name: str, exc_attrs: tuple[str, ...], plain_attrs: tuple[str, ...] = ()) -> None:
+    if name in sys.modules:
+        return  # idempotent — see the __spec__ note below
+    if importlib.util.find_spec(name) is not None:
+        return  # real package available — always prefer it
+    stub = types.ModuleType(name)
+    # types.ModuleType leaves __spec__ unset (None). CPython's find_spec checks
+    # sys.modules FIRST and *raises* ValueError on a cached module with no spec,
+    # so an unset __spec__ poisons every later find_spec/importorskip in the
+    # session — importorskip would return this stub instead of skipping, and a
+    # future capability check would silently test against a mock.
+    stub.__spec__ = importlib.machinery.ModuleSpec(name, loader=None)
+    for attr in exc_attrs:
+        setattr(stub, attr, type(attr, (Exception,), {}))
+    # Non-exception names must NOT subclass Exception: `OpenAI` is a client
+    # class, and making it throwable lets `raise openai.OpenAI(...)` typecheck
+    # while `client.responses` raises AttributeError — which is absent from
+    # gpt_review's `except (OpenAIError, httpx.HTTPError, OSError)` tuple and
+    # would escape to main()'s broad net, faking a fail-closed result via
+    # entirely the wrong code path.
+    for attr in plain_attrs:
+        setattr(stub, attr, type(attr, (), {}))
+    sys.modules[name] = stub
+
+
+_ensure_module("httpx", ("HTTPError",))
+_ensure_module("openai", ("APIError", "OpenAIError", "RateLimitError"), ("OpenAI",))
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _MODULE_PATH = _REPO_ROOT / ".github" / "scripts" / "gpt_review.py"
@@ -46,6 +89,15 @@ _spec.loader.exec_module(gr)
 # Shaped like a real OpenAI key so _SECRET_PATTERNS' {16,} length floor applies.
 _FAKE_KEY = "sk-proj-AbCdEf0123456789XyZwVuTsRq"
 _FAKE_BEARER = "Bearer AbCdEf0123456789XyZwVuTsRq"
+
+# THE shape the docstring actually cites — and the one the original pattern let
+# through. `sk-[A-Za-z0-9_-]{16,}` cannot match it: `*` and `.` are outside the
+# character class, so the match dies after 5 chars and never reaches {16,}.
+# The first version of this file passed only because _FAKE_KEY above is
+# UNMASKED — a shape the real auth error never has. The test proved a property
+# the production data does not exhibit.
+_MASKED_KEY_STARS = "sk-pr*******************dEfA"
+_MASKED_KEY_DOTS = "sk-...AbCd"
 
 
 class _Obj:
@@ -62,8 +114,46 @@ class TestSanitizerPrimitive:
     def test_redacts_bearer_token(self) -> None:
         assert "<redacted-secret>" in gr._safe_text(_FAKE_BEARER)
 
+    def test_redacts_masked_openai_key_stars(self) -> None:
+        """The documented threat: OpenAI's partially-masked echo in auth errors."""
+        out = gr._safe_text(f"Incorrect API key provided: {_MASKED_KEY_STARS}. You can find...")
+        assert _MASKED_KEY_STARS not in out
+        assert "<redacted-secret>" in out
+
+    def test_redacts_masked_openai_key_dots(self) -> None:
+        out = gr._safe_text(f"Incorrect API key provided: {_MASKED_KEY_DOTS}")
+        assert _MASKED_KEY_DOTS not in out
+
+    # Bodies are deliberately the literal word EXAMPLE repeated: these must be
+    # long enough to clear each pattern's length floor, but must never look like
+    # a live credential to a secret scanner or to a human skimming the diff.
+    @pytest.mark.parametrize(
+        "secret",
+        [
+            "org-EXAMPLEEXAMPLEEXAMPLE",
+            "proj_EXAMPLEEXAMPLEEXAMPLE",
+            "uk_live_EXAMPLEEXAMPLEEXAMPLE",
+            "ghs_EXAMPLEEXAMPLEEXAMPLE",
+            "github_pat_EXAMPLEEXAMPLEEXAMPLE",
+            "AKIAIOSFODNN7EXAMPLE",  # AWS's own documented placeholder
+        ],
+    )
+    def test_redacts_other_credential_shapes(self, secret: str) -> None:
+        """Reachable via an OpenAI error, an AEGIS 401, or a diff line the model quotes."""
+        assert secret not in gr._safe_text(f"failure involving {secret} here")
+
+    def test_redacts_url_embedded_credentials(self) -> None:
+        out = gr._safe_text("cloning https://user:sup3rS3cretPassw0rd@proxy.internal:8080/x")
+        assert "sup3rS3cretPassw0rd" not in out
+        assert "https://" in out, "the scheme must survive — only userinfo is stripped"
+
     def test_preserves_non_secret_text(self) -> None:
         msg = "Your account is not active, please check your billing details"
+        assert gr._safe_text(msg) == msg
+
+    def test_preserves_ordinary_review_prose(self) -> None:
+        """Over-redaction would make the reviewer useless — pin the common case."""
+        msg = "In `gpt_review.py:659` the call to write_text() should use _safe_text()."
         assert gr._safe_text(msg) == msg
 
     def test_safe_exc_still_delegates_correctly(self) -> None:
@@ -119,6 +209,31 @@ class TestFailureDetailShapes:
     def test_nothing_available_degrades_to_empty(self) -> None:
         """Never invent a reason — the caller then reports the bare status."""
         assert gr._failure_detail(_Obj(status="failed", error=None)) == ""
+
+
+class TestSuccessPathIsSanitized:
+    """The fallback path was guarded; the SUCCESS path — far more text — was not.
+
+    `_write_fallback` reasons are short. The success path publishes the model's
+    entire review, and SYSTEM_PROMPT directs it to cite file:line evidence from
+    the diff and names "secret leak" as a CRITICAL finding class. So a PR that
+    leaks a credential — exactly what this reviewer exists to catch — would get
+    that credential republished by the reviewer's own public comment.
+
+    This is a source-level guard, stated plainly: reaching the real success path
+    needs a live API call. It pins the one property that matters (the write is
+    routed through the sanitizer) without pretending to exercise the request.
+    """
+
+    def test_every_markdown_write_routes_through_safe_text(self) -> None:
+        src = _MODULE_PATH.read_text(encoding="utf-8")
+        writes = re.findall(r"args\.output\.write_text\([^\n]*", src)
+        assert writes, "no write_text site found — did the emit path move?"
+        unsanitized = [w for w in writes if "markdown" in w and "_safe_text(" not in w]
+        assert not unsanitized, (
+            f"success-path write publishes unsanitized model output: {unsanitized}. "
+            "gpt_review.md is posted verbatim as a PR comment on a PUBLIC repo."
+        )
 
 
 class TestFailClosedPreserved:

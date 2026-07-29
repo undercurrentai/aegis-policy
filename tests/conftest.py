@@ -48,6 +48,11 @@ def _ensure_fixtures_generated() -> None:
         capture_output=True,
         text=True,
         cwd=REPO_ROOT,
+        # Documented at 3-5s. Bound it anyway: this is session-scoped autouse,
+        # so a hang here stalls collection itself with no test output to explain
+        # why. stdin=DEVNULL so it can never block waiting on input.
+        timeout=120,
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         pytest.fail(

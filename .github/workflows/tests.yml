@@ -1,0 +1,150 @@
+name: Tests
+
+# Runs the repository test suite on every PR.
+#
+# WHY THIS EXISTS
+# ---------------
+# Before this job, NO workflow ran `tests/`. The only workflow that invoked
+# pytest at all — `e2-action-selftest.yml` — ran a single file
+# (`tests/test_verify_action.py`) and is `workflow_dispatch`-only, because that
+# file needs the private aegis-sdk behind `AEGIS_SDK_FETCH_TOKEN`.
+#
+# Net effect: 90+ tests, including the guard that stops an API key reaching a
+# PUBLIC PR comment (tests/test_gpt_review_failure_detail.py), executed only on
+# whichever laptop happened to run `pytest` by hand. A guard nobody runs is
+# documentation, not enforcement — the same absence-of-signal failure this repo
+# has hit repeatedly.
+#
+# SCOPE — deliberately secret-free, and what that LEAVES UNGATED
+# --------------------------------------------------------------
+# `tests/test_verify_action.py` is deselected via the `needs_secrets` marker
+# (see pytest.ini). It shells out to `scripts/verify_action.py`, which needs the
+# private aegis-sdk; without the token 18 of its 19 tests fail. Including it
+# would make this job red-by-default on forks — a gate that cannot be green is
+# worse than no gate, because people learn to ignore it.
+#
+# BE PRECISE ABOUT THE RESIDUAL GAP, because a green check invites the opposite
+# assumption: those 19 deselected tests are NOT gated on pull requests. They
+# hold the repo's highest-severity assertions — including the regression guard
+# proving `AEGIS_KEYS_DIR_OVERRIDE`/`AEGIS_POLICY_PATH_OVERRIDE` are ignored
+# unless `AEGIS_INTERNAL_FIXTURE_MODE` is set, i.e. the defence against a
+# compromised prior step redirecting the action at attacker-controlled keys.
+# Their only home is `e2-action-selftest.yml`, which is workflow_dispatch-only
+# and needs an admin-configured secret. Manual dispatch is not coverage. Closing
+# that is tracked separately; do not read this check as covering it.
+#
+# Measured on a clean venv (requirements-dev.txt only, no httpx/openai/aegis-sdk):
+# 92 passed, 19 deselected, 0 skipped.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: Test suite (py${{ matrix.python-version }})
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Measured runtime is ~14s. The default is 360 minutes on a billed runner,
+    # which is what an accidentally-unbounded subprocess would burn.
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is what `ai-second-review.yml` actually runs gpt_review.py on;
+        # gating only on 3.13 would test a config this repo does not ship.
+        python-version: ["3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        # requirements-dev.txt only. httpx/openai are deliberately NOT installed:
+        # tests/test_gpt_review_failure_detail.py stubs them when absent so its
+        # security assertions run in any environment. If a future test genuinely
+        # needs them, add them to requirements-dev.txt rather than installing
+        # ad hoc here, so local and CI environments stay identical.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run test suite
+        # `-m "not needs_secrets"`, not `--ignore=<path>`: the exclusion is a
+        # capability statement that belongs next to the test (pytest.ini), so a
+        # future secrets-needing file degrades gracefully instead of turning
+        # this job red until someone edits the workflow.
+        run: |
+          pytest tests/ -m "not needs_secrets" -q --tb=short \
+            --junitxml=pytest-report.xml
+
+      - name: Assert the security guard actually EXECUTED
+        # Belt-and-braces against the exact bug this job was created to fix.
+        #
+        # The first version of this step counted `--collect-only` output. Two
+        # independent audits proved that insufficient, and I reproduced both:
+        #   * a module-level `pytest.mark.skip` => "13 skipped", exit 0, GREEN,
+        #     and collect-only still counts 13 => guard PASSES;
+        #   * adding the file to step 1's exclusions => step 1 never runs it,
+        #     but step 2 ran the file in isolation and so could never notice.
+        # A collected count is not an executed count, and a second invocation
+        # cannot observe what the first one did.
+        #
+        # Reading the JUnit XML that step 1 itself produced closes both holes:
+        # it reports what that specific run executed, and a skipped testcase
+        # carries a <skipped/> child, so skips are distinguishable from passes.
+        # `if: always()` so a red suite still reports whether the guard ran.
+        if: always()
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys, xml.etree.ElementTree as ET
+
+          TARGET, MINIMUM = "test_gpt_review_failure_detail", 20
+          try:
+              raw = open("pytest-report.xml", "rb").read()
+              # This job runs fork-authored code, so treat its own report as
+              # untrusted input. stdlib ElementTree ignores external entities
+              # but still expands internal ones (billion-laughs). pytest never
+              # emits a DTD, so rejecting one outright is free and fail-closed
+              # — cheaper than adding defusedxml to every CI install.
+              if b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+                  print("::error::pytest-report.xml contains a DTD; pytest "
+                        "never emits one. Refusing to parse.")
+                  sys.exit(1)
+              root = ET.fromstring(raw)
+          except SystemExit:
+              raise
+          except Exception as exc:  # missing, truncated, or unparseable
+              print(f"::error::cannot read pytest-report.xml ({exc}) — "
+                    "guard status unknown, failing closed")
+              sys.exit(1)
+
+          cases = [tc for tc in root.iter("testcase")
+                   if TARGET in (tc.get("classname") or "")]
+          executed = [tc for tc in cases if tc.find("skipped") is None]
+          print(f"guard tests: collected={len(cases)} executed={len(executed)}")
+
+          if len(executed) < MINIMUM:
+              print(f"::error::Expected >={MINIMUM} EXECUTED tests in "
+                    f"tests/{TARGET}.py; got {len(executed)} "
+                    f"({len(cases) - len(executed)} skipped or absent). The "
+                    "API-key redaction guard did not run — do NOT merge on a "
+                    "green suite alone.")
+              sys.exit(1)
+          PY

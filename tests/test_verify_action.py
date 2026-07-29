@@ -25,7 +25,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
+
+# Every test here shells out to scripts/verify_action.py, which needs the
+# private aegis-sdk fetched with AEGIS_SDK_FETCH_TOKEN. Without it, 18 of these
+# 19 fail. The marker lets the PR-gating job in tests.yml deselect this file by
+# capability rather than by hardcoded path — see pytest.ini for why that is
+# more durable than `--ignore`.
+#
+# State the consequence plainly: these tests are NOT gated on pull requests.
+# Their only home is the token-bearing e2-action-selftest.yml, which is
+# workflow_dispatch-only. Manual dispatch is not coverage.
+pytestmark = pytest.mark.needs_secrets
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "verify_action.py"
