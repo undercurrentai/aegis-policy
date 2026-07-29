@@ -21,6 +21,7 @@ Run: pytest tests/test_workflow_invariants.py -v
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REUSABLE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "aegis-verify-attestation.yml"
 SELFTEST_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "e3-workflow-selftest.yml"
 AI_SECOND_REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ai-second-review.yml"
+TESTS_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "tests.yml"
 
 
 class TestReusableWorkflowF1F2Regression:
@@ -419,3 +421,81 @@ class TestSlsaUrlF8Regression:
         fixed."""
         body = (REPO_ROOT / "CHANGELOG.md").read_text()
         assert "slsa.dev/spec/v1.0/use-cases-build-tool-reusable-workflow" not in body
+
+
+class TestTestsWorkflowInvariants:
+    """`tests.yml` is now the gate for the API-key redaction guard.
+
+    Every other workflow in this repo that carries a security property has its
+    shape pinned here. This one had nothing, which meant the properties that
+    make it trustworthy — least-privilege token, SHA-pinned actions, a bounded
+    runtime, and an execution-based (not collection-based) guard assertion —
+    could be edited away without a single test going red.
+    """
+
+    def test_permissions_are_read_only(self):
+        doc = yaml.safe_load(TESTS_WORKFLOW.read_text())
+        assert doc["permissions"] == {"contents": "read"}, (
+            "tests.yml runs fork-authored code (pip install of a fork-controlled "
+            "requirements file, then fork-controlled tests). Its token must stay "
+            "read-only."
+        )
+
+    def test_uses_pull_request_not_pull_request_target(self):
+        wf = TESTS_WORKFLOW.read_text()
+        assert "pull_request_target" not in wf, (
+            "pull_request_target would check out fork code under a privileged "
+            "token on a PUBLIC repo — a critical vulnerability, not a trigger fix."
+        )
+
+    def test_actions_are_sha_pinned(self):
+        wf = TESTS_WORKFLOW.read_text()
+        unpinned = re.findall(r"uses:\s*(\S+@(?!\w{40})\S+)", wf)
+        assert not unpinned, f"unpinned actions in tests.yml: {unpinned}"
+
+    def test_job_is_time_bounded(self):
+        doc = yaml.safe_load(TESTS_WORKFLOW.read_text())
+        assert "timeout-minutes" in doc["jobs"]["pytest"], (
+            "Without timeout-minutes the default is 360 on a billed runner — "
+            "the ceiling an unbounded subprocess would burn."
+        )
+
+    def test_guard_asserts_execution_not_collection(self):
+        """The regression guard for this job's own core defect.
+
+        The first version counted `pytest --collect-only` output. A module-level
+        `pytest.mark.skip` produced "13 skipped", exit 0, a GREEN job, and a
+        collected count of 13 — so the guard passed while every assertion it
+        protects was disabled. Reading the JUnit XML step 1 produced is what
+        distinguishes executed from merely collected.
+        """
+        wf = TESTS_WORKFLOW.read_text()
+        assert "--junitxml" in wf, "the suite step must emit a JUnit report"
+        # Comment lines are stripped first: the step's own commentary explains
+        # why --collect-only was abandoned, and a naive substring check would
+        # match that explanation instead of the command it warns about.
+        executable = "\n".join(
+            line for line in wf.splitlines() if not line.lstrip().startswith("#")
+        )
+        assert "--collect-only" not in executable, (
+            "collection-based counting is the defect this step was rewritten to "
+            "fix — a collected test can be a skipped test."
+        )
+        assert 'tc.find("skipped") is None' in wf, (
+            "the guard must exclude <skipped/> testcases, or a blanket skip mark "
+            "walks straight through it again."
+        )
+
+    def test_secrets_needing_tests_are_deselected_by_marker(self):
+        """`--ignore=<path>` was replaced by a capability marker.
+
+        A path exclusion makes the NEXT secrets-needing test file turn this job
+        red-by-default, with the fix living in a workflow its author had no
+        reason to open.
+        """
+        wf = TESTS_WORKFLOW.read_text()
+        assert 'not needs_secrets' in wf
+        assert "--ignore=tests/" not in wf, (
+            "path-based exclusion reintroduces the durability problem; declare "
+            "the requirement on the test via the needs_secrets marker instead."
+        )

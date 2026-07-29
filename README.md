@@ -44,4 +44,6 @@ Email `security@undercurrentholdings.com` or use GitHub's [private vulnerability
 
 ## Status
 
-`v1.2.3` — Sprint 6/F1 SHIP COMPLETE + §38 forensic-audit chain (aegis-governance v1.2.7 in production since 2026-05-21). Sprint 7/G1-G3 readiness 🟢 GREEN UNBLOCKED at architectural-contract layer. See `CHANGELOG.md` for the cumulative ship cycle (E1 → E1.5 → E2 → E3 → sub-phase 3a → QG-§37.18 → sub-phase 4 v1.2.6 → §38 v1.2.7 → docs/roadmap.md content refresh).
+`v1.3.0` — the `aegis-enforce.yml` public surface gained the `on_unavailable` and `allowed_api_hosts` inputs, so an unreachable AEGIS API is now distinguishable from a governance denial (the conflation deadlocked `aegis-governance` main during the 2026-06/07 outage). The repository test suite is gated on every PR for the first time. See `CHANGELOG.md`.
+
+Earlier: Sprint 6/F1 SHIP COMPLETE + §38 forensic-audit chain (aegis-governance v1.2.7 in production since 2026-05-21); cumulative ship cycle E1 → E1.5 → E2 → E3 → sub-phase 3a → QG-§37.18 → sub-phase 4 v1.2.6 → §38 v1.2.7.

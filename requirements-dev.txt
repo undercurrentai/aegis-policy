@@ -16,3 +16,14 @@ PyYAML>=6.0
 # so no `cryptography` ML-DSA extraction is needed at gate time (the ASN.1
 # DER parse in scripts/extract_mldsa65_raw.py is only for key-rotation ops).
 cryptography>=42
+
+# Test runner for `tests/` (see .github/workflows/tests.yml). Listed here so the
+# suite is installable from one file; the gpt_review tests deliberately stub
+# httpx/openai when absent rather than requiring them, so those stay out.
+#
+# Upper-bounded because tests.yml's security-guard step parses pytest's JUnit
+# XML. That schema is stable across 8.x/9.x, but a major bump is exactly where
+# it could change — and a guard that silently stops parsing is the failure this
+# repo keeps hitting. A bare `pip install ruff` is what turned every open PR in
+# aegis-governance red when 0.16.0 shipped; same class, so bound it.
+pytest>=8.0,<10

@@ -32,6 +32,9 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+# Written by .github/workflows/tests.yml --junitxml (and by any local repro of
+# that job); the guard step reads it from the working directory.
+pytest-report.xml
 *.cover
 .hypothesis/
 .mypy_cache/
