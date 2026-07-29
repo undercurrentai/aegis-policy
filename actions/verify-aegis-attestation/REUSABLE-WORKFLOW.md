@@ -23,9 +23,9 @@ jobs:
       expected-digest: ${{ needs.build.outputs.sha256 }}
       expected-environment: production
       replay-store-path: .github/.aegis-replay.log
-      aegis-sdk-git-ref: dc9c9df  # until task #59 PyPI publish
-    secrets:
-      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
+      # (default PyPI install — aegis-governance[verify]==1.0.0, no secret.
+      # Add aegis-sdk-git-ref + the AEGIS_SDK_FETCH_TOKEN secret only to pin
+      # an unreleased SDK commit from the private source repo.)
 
   deploy:
     needs: verify-attestation
@@ -73,7 +73,7 @@ The reusable workflow's input set is the composite Action's 8 inputs + `runs-on`
 | `replay-store-path` | no | `""` | Workspace-relative path to append-only replay-detection file. Empty = no replay check; action emits `::warning::`. |
 | `python-version` | no | `3.13` | Python version for `setup-python`. |
 | `aegis-sdk-version` | no | `1.0.0` | PyPI version pin for `aegis-governance[verify]`. Used when `aegis-sdk-git-ref` is empty. |
-| `aegis-sdk-git-ref` | no | `""` | Optional Git ref for `aegis-sdk` install. Required until task #59 (PyPI publish) ships. |
+| `aegis-sdk-git-ref` | no | `""` | Optional Git ref for `aegis-sdk` install — overrides the PyPI default (the standard path; task #59 shipped 2026-05-15). Needs repo read access: see Secrets. |
 | `runs-on` | no | `blacksmith-4vcpu-ubuntu-2404` | Runner label. Override for GitHub-hosted or self-hosted pools. |
 
 ### Test-only inputs (3) — NEVER set in production
@@ -94,7 +94,7 @@ These propagate via `env:` block on the composite step inside this workflow (mat
 
 | Secret | Required | Purpose |
 |---|---|---|
-| `AEGIS_SDK_FETCH_TOKEN` | no | PAT with read access to private `undercurrentai/aegis-governance`. Required only when `aegis-sdk-git-ref` is set AND aegis-governance is private. Ignored on the PyPI path (post task #59). |
+| `AEGIS_SDK_FETCH_TOKEN` | no | PAT with read access to `undercurrentai/aegis-governance`. Required only when `aegis-sdk-git-ref` is set AND fetching that ref needs auth. Ignored on the **default** PyPI path — `aegis-governance[verify]` has been on public PyPI since 2026-05-15 (task #59). |
 
 Pass via `secrets:` block on the `uses:` call:
 
@@ -211,9 +211,8 @@ jobs:
       expected-digest: ${{ inputs.artifact-sha256 }}
       expected-environment: production
       replay-store-path: .github/.aegis-replay.log
-      aegis-sdk-git-ref: dc9c9df  # until task #59
-    secrets:
-      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
+      # (default PyPI install; aegis-sdk-git-ref + AEGIS_SDK_FETCH_TOKEN only
+      # for pinning an unreleased SDK commit)
 
   deploy:
     needs: verify-attestation

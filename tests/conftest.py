@@ -1,6 +1,6 @@
 """pytest fixtures + auto-regeneration shim for Sprint 5/E2 self-test.
 
-The 12 tests in `test_verify_action.py` read `tests/fixtures/manifest.json` at
+The 19 tests in `test_verify_action.py` read `tests/fixtures/manifest.json` at
 module-import time (collection phase). On a fresh clone, manifest.json + the 3
 envelope fixtures + test-keys don't yet exist — the import fails with
 FileNotFoundError before any test runs. This module installs a

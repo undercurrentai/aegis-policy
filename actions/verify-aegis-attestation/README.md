@@ -56,7 +56,7 @@ See [`REUSABLE-WORKFLOW.md`](REUSABLE-WORKFLOW.md) for full docs on the reusable
 | `replay-store-path` | no | `""` | Workspace-relative path to an append-only replay-detection file. Set to enable consumer-owned replay detection (see §Replay detection below). |
 | `python-version` | no | `3.13` | Python version for `setup-python`. |
 | `aegis-sdk-version` | no | `1.0.0` | PyPI version pin for `aegis-governance[verify]`. Used when `aegis-sdk-git-ref` is empty. |
-| `aegis-sdk-git-ref` | no | `""` | Optional Git ref (commit SHA / tag / branch) to install `aegis-sdk` from. When set, overrides `aegis-sdk-version`. **Required until AU-N-1 (task #59 PyPI publish) ships.** See §Installation source below. |
+| `aegis-sdk-git-ref` | no | `""` | Optional Git ref (commit SHA / tag / branch) to install `aegis-sdk` from. When set, overrides `aegis-sdk-version` (the PyPI default, which is the standard path — task #59 shipped 2026-05-15). See §Installation source below. |
 
 ---
 
@@ -78,18 +78,18 @@ See [`REUSABLE-WORKFLOW.md`](REUSABLE-WORKFLOW.md) for full docs on the reusable
 
 ## Installation source
 
-`aegis-governance` is currently a private repo and `aegis-governance[verify]` is NOT yet published to PyPI (task #59, AU-N-1 — tracked in cosmic-flute §27.16). Until that ships:
+**Default (recommended): public PyPI.** `aegis-governance[verify]` has been published to PyPI since 2026-05-15 (task #59, AU-N-1) — the action's default `aegis-sdk-version: 1.0.0` installs it with no secret, no extra input:
 
 ```yaml
 - uses: undercurrentai/aegis-policy/actions/verify-aegis-attestation@<sha>
   with:
-    aegis-sdk-git-ref: dc9c9df  # post-v1.2.4 aegis-governance main
+    # no aegis-sdk-* inputs needed — installs aegis-governance[verify]==1.0.0 from PyPI
     # ...
 ```
 
-This requires the consumer workflow to have read access to the private `undercurrentai/aegis-governance` repo. For `undercurrentai/*` consumer repos, the default `GITHUB_TOKEN` may not suffice — see [GitHub docs on installing from private repos](https://docs.github.com/en/actions/security-guides/automatic-token-authentication) for the personal-access-token approach.
+**Override: commit-pinned Git install.** Set `aegis-sdk-git-ref` to install from a specific `undercurrentai/aegis-governance` ref instead. That repo is private, so the consumer workflow needs read access — see [GitHub docs on token authentication](https://docs.github.com/en/actions/security-guides/automatic-token-authentication). This was the only viable path before the PyPI publish; today it is for deliberately pinning an unreleased SDK commit.
 
-**Once task #59 lands**, the default `aegis-sdk-version: 1.0.0` will work directly from PyPI; `aegis-sdk-git-ref` becomes unnecessary.
+(An earlier revision of this section said the PyPI path did not work yet; that stopped being true on 2026-05-15 and was corrected 2026-07-29.)
 
 ---
 
@@ -194,7 +194,7 @@ jobs:
           expected-digest: ${{ inputs.artifact-digest }}
           expected-environment: production
           replay-store-path: .github/.aegis-replay.log
-          aegis-sdk-git-ref: dc9c9df  # until task #59 PyPI publish
+          # (default PyPI install; add aegis-sdk-git-ref only to pin an unreleased SDK commit)
 
       - name: Halt on verification failure
         if: steps.verify.outputs.valid != 'true'

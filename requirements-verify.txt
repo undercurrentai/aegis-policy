@@ -1,0 +1,33 @@
+# Verifier-kit CI dependencies — SOURCE file for requirements-verify-ci.txt.
+#
+# The lockfile compiled from this file is installed by the `verifier-kit` job
+# in .github/workflows/tests.yml: the job that actually RUNS the 19
+# tests/test_verify_action.py tests (marker `needs_aegis_sdk`) — including the
+# guard proving AEGIS_KEYS_DIR_OVERRIDE / AEGIS_POLICY_PATH_OVERRIDE are
+# ignored without AEGIS_INTERNAL_FIXTURE_MODE.
+#
+# SEPARATE from requirements-dev.txt for the same reason requirements-aux.txt
+# is: the pytest matrix job's venv deliberately excludes the SDK so the
+# deselection marker stays an honest capability statement, and the SDK's
+# dependency tree (liboqs-python et al.) has no business in the fast matrix
+# legs.
+#
+# The SDK pin is EXACT (==1.0.0, not >=): it is the version
+# actions/verify-aegis-attestation/action.yml defaults to, and the committed
+# fixtures are proven against it. There is no evidence about wire-format
+# stability across 1.0.0 → current; bump deliberately, with the fixtures
+# re-verified, never via range drift.
+#
+# Regenerate the lockfile whenever this file changes (a drift guard in
+# tests/test_workflow_invariants.py fails until you do):
+#   pip install pip-tools
+#   pip-compile --generate-hashes --strip-extras \
+#     --output-file=requirements-verify-ci.txt requirements-verify.txt
+
+# The verifier kit itself — public PyPI since 2026-05-15 (roadmap task #59).
+aegis-governance[verify]==1.0.0
+
+# Test runner + YAML for the test module itself (same bounds as
+# requirements-dev.txt).
+pytest>=8.0,<10
+PyYAML>=6.0

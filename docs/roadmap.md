@@ -46,6 +46,23 @@ still requires one final break-glass cycle.
 
 **Tracking:** `docs/operations/trust-spine-break-glass.md`; cosmic-flute §34.17.2
 
+### Promote `Verifier kit (py3.13)` to a required check
+
+**Status:** 🟡 WAITING on run history — decision taken 2026-07-29 (plan `expressive-honking-lake`,
+U3): land advisory first, promote after **~2 weeks** of green runs (≈ 2026-08-12).
+
+The `verifier-kit` job in `.github/workflows/tests.yml` runs the 19 `needs_aegis_sdk` tests
+(`tests/test_verify_action.py`, including the `AEGIS_KEYS_DIR_OVERRIDE` redirection guard) on
+every PR against `aegis-governance[verify]==1.0.0` from public PyPI. It is deliberately NOT in
+org ruleset `16294975` yet: the `Test suite (py3.12/py3.13)` contexts were themselves promoted on
+a two-run history the same day, and stacking a second unproven required check — one with a native
+liboqs build and a cache dependency in its critical path — compounds that risk.
+
+**Promotion procedure:** snapshot → full-payload PUT adding context `Verifier kit (py3.13)`
+byte-exact (NO "(advisory)" suffix exists to strip — named once, promoted unchanged, per the
+PR #5 check-name-mismatch lesson) → verify 8 contexts + `bypass_actors: []` intact. Before
+promoting, check the run history for liboqs cold-build flakes and cache-miss latency.
+
 ## Phase 2 (post-Sprint 7) — ecosystem-compat
 
 Out of the rigor-aegis-attestations protocol scope; planned for the cosmos-mixing-snuggly successor protocol:

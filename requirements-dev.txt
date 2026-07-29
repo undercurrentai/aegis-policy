@@ -1,11 +1,15 @@
-# Dev dependencies for the parity-check script + lint workflow.
+# Dev dependencies for the parity-check scripts + the test suite. This is the
+# human-readable SOURCE; CI installs the lockfile compiled from it
+# (requirements-ci.txt — see its header).
 #
-# Note: aegis-governance>=0.6.1 is NOT on PyPI yet (latest published: 0.4.1)
-# and the source repo is private (BSL-1.1). Rather than carrying a PAT secret
-# + Git-installer in CI, we vendor `aegis-sdk/src/aegis/_verify_local.py` into
-# `scripts/_verify_local_vendored.py` and AST-walk it for parity checking.
-# See `scripts/check_error_class_parity.py` module docstring + the vendored
-# file's header for refresh procedure.
+# Note on the vendored SDK source: `aegis-governance[verify]` has been on
+# public PyPI since 2026-05-15 (an earlier header here said it was private —
+# stale since then). The parity check still AST-walks the vendored copy at
+# `scripts/_verify_local_vendored.py` rather than installing the SDK, by
+# CHOICE not necessity: an ~8s repo-state gate should not carry the SDK's
+# dependency tree (liboqs native build) — and the AST walk needs source, not
+# an importable module. See `scripts/check_error_class_parity.py` module
+# docstring + the vendored file's header for the refresh procedure.
 
 # YAML parsing for the parity check + lint workflow's parse-smoke loop.
 PyYAML>=6.0

@@ -5,7 +5,9 @@ name: E3 Reusable Workflow Self-Test
 # Exercises the reusable workflow's input/output passthrough at the JOB level
 # (one level of indirection deeper than e2-action-selftest.yml's STEP-level
 # invocations of the composite Action). Validates:
-#   - workflow_call: signature accepts all 12 inputs + 1 secret
+#   - workflow_call: signature accepts the full input surface (the optional
+#     AEGIS_SDK_FETCH_TOKEN secret is no longer passed or exercised here —
+#     the PyPI default install needs none)
 #   - github.event.workflow.ref correctly resolves to this branch's HEAD
 #     during the inner checkout step
 #   - Two-stage output indirection (step → job.outputs → workflow_call.outputs)
@@ -15,16 +17,19 @@ name: E3 Reusable Workflow Self-Test
 #     AEGIS_POLICY_PATH_OVERRIDE env vars on the composite step inside the
 #     reusable workflow's `verify` job
 #
-# Trigger: `workflow_dispatch:` only — same rationale as e2-action-selftest.yml
-# (aegis-sdk[verify] install requires AEGIS_SDK_FETCH_TOKEN PAT until task #59
-# PyPI publish ships). Activation path post-#59 documented in e2 header.
+# Trigger: `workflow_dispatch:` only — by COST, mirroring e2-action-selftest.yml:
+# the SDK installs from public PyPI with no secret (task #59 shipped
+# 2026-05-15; an earlier version of this comment predates that), but every
+# invocation cold-builds the native liboqs library inside the composite —
+# minutes on a billed runner per job. The unit-test layer runs on every PR
+# via tests.yml's `verifier-kit` job; dispatch this for plumbing validation.
 #
 # Reuses the same E2-shipped test fixtures (tests/fixtures/envelope-*.json +
 # tests/fixtures/test-keys/ + tests/fixtures/policy-test-v1.yaml + the
 # manifest.json digests captured by tests/fixtures/generate_fixtures.py).
 # Hard-coded `expected-digest` values match the current committed manifest;
 # if fixtures are regenerated locally, these MUST be updated to match the new
-# manifest (see e2-action-selftest.yml line 98-102 for the same caveat).
+# manifest (see the fixture-digest caveat on e2-action-selftest.yml's happy-path assert step).
 
 on:
   workflow_dispatch:
@@ -45,13 +50,10 @@ jobs:
       expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
       expected-environment: "preview"
       replay-store-path: ".aegis-replay-e3-happy.log"
-      aegis-sdk-git-ref: dc9c9df
       # Test-only inputs (map to env vars on composite step per cosmic-flute §35.5):
       internal-fixture-mode: "1"
       internal-keys-dir-override: tests/fixtures/test-keys
       internal-policy-path-override: tests/fixtures/policy-test-v1.yaml
-    secrets:
-      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
 
   assert-happy-path:
     name: Assert — happy path
@@ -82,12 +84,9 @@ jobs:
       envelope: "@tests/fixtures/envelope-tampered-digest.json"
       expected-digest: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       expected-environment: "preview"
-      aegis-sdk-git-ref: dc9c9df
       internal-fixture-mode: "1"
       internal-keys-dir-override: tests/fixtures/test-keys
       internal-policy-path-override: tests/fixtures/policy-test-v1.yaml
-    secrets:
-      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
 
   assert-tampered-digest:
     name: Assert — tampered digest
@@ -125,12 +124,9 @@ jobs:
       envelope: "@tests/fixtures/envelope-expired.json"
       expected-digest: "1ff5ccc05032641ada6f8a57995e2184e4da9f21672879fdaca61ba8b71e2bb5"
       expected-environment: "preview"
-      aegis-sdk-git-ref: dc9c9df
       internal-fixture-mode: "1"
       internal-keys-dir-override: tests/fixtures/test-keys
       internal-policy-path-override: tests/fixtures/policy-test-v1.yaml
-    secrets:
-      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
 
   assert-expired:
     name: Assert — expired envelope
@@ -163,12 +159,9 @@ jobs:
       expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
       expected-environment: "preview"
       replay-store-path: ".aegis-replay-e3-test.log"
-      aegis-sdk-git-ref: dc9c9df
       internal-fixture-mode: "1"
       internal-keys-dir-override: tests/fixtures/test-keys
       internal-policy-path-override: tests/fixtures/policy-test-v1.yaml
-    secrets:
-      AEGIS_SDK_FETCH_TOKEN: ${{ secrets.AEGIS_SDK_FETCH_TOKEN }}
 
   # NB: Because GitHub Actions runs each job in a fresh runner with a
   # fresh workspace, the replay-store file from selftest-replay-first does
@@ -248,7 +241,6 @@ jobs:
           expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
           expected-environment: "preview"
           replay-store-path: .aegis-replay-e3-test.log
-          aegis-sdk-git-ref: dc9c9df
         env:
           AEGIS_INTERNAL_FIXTURE_MODE: "1"
           AEGIS_KEYS_DIR_OVERRIDE: tests/fixtures/test-keys
