@@ -1,0 +1,24 @@
+# Auxiliary CI dependencies — SOURCE file for requirements-aux-ci.txt.
+#
+# The lockfile compiled from this file is installed by the three workflows
+# whose tooling does NOT belong in the test venv: lint.yml (yamllint +
+# PyYAML), aegis-shadow-eval.yml (httpx), resolve-callee-parity.yml (PyYAML).
+# It is deliberately SEPARATE from requirements-dev.txt: installing httpx into
+# the tests.yml venv would defeat tests/test_gpt_review_failure_detail.py's
+# deliberate-absence stubbing, so the two dependency sets must not merge.
+# Each job installs the union; surplus packages in a lint venv are harmless,
+# a missing stub in the test venv is not.
+#
+# Regenerate the lockfile whenever this file changes (a drift guard in
+# tests/test_workflow_invariants.py fails until you do):
+#   pip install pip-tools
+#   pip-compile --generate-hashes --strip-extras \
+#     --output-file=requirements-aux-ci.txt requirements-aux.txt
+
+# lint.yml "YAML lint + parse" (required check) + the parse-smoke loop.
+yamllint>=1.35
+PyYAML>=6.0
+
+# aegis-shadow-eval.yml "AEGIS Shadow Evaluation" (required check) — the
+# Stage-2 submission client.
+httpx>=0.27

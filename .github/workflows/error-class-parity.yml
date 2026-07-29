@@ -12,19 +12,31 @@ on:
   pull_request:
     branches:
       - main
+    # NO `paths:` filter — deliberately, per cosmic-flute §48.15 R2, the same
+    # anti-skipped-check-hang rule aegis-enforce-caller.yml already carries:
+    # this job is a REQUIRED status check in org ruleset 16294975, and a
+    # required check that never reports sits at "Expected" forever. The old
+    # filter made every PR touching none of the filtered paths structurally
+    # unmergeable in-band — verified on #33, #34 (docs-only) and #35
+    # (.github/scripts + a workflow not in the filter), each missing 2 of 5
+    # required checks. The job is ~8s and asserts a repo-state invariant, so
+    # it passes on any PR regardless of what that PR changed. Guarded by
+    # tests/test_workflow_invariants.py::TestRequiredCheckWorkflowsHaveNoPathsFilter.
+  push:
+    branches:
+      - main
+    # push keeps its path scope: post-merge visibility for direct/admin pushes
+    # that touch the gate's inputs. Only the pull_request side is a required
+    # check, so only it must be unconditional. "Inputs" includes the workflow
+    # file itself and both dependency files (the lockfile is what the job
+    # installs; the dev file is its source) — mirroring fingerprint-parity.
     paths:
       - "policy/verifier-policy-v1.yaml"
       - "scripts/check_error_class_parity.py"
       - "scripts/_verify_local_vendored.py"
       - ".github/workflows/error-class-parity.yml"
       - "requirements-dev.txt"
-  push:
-    branches:
-      - main
-    paths:
-      - "policy/verifier-policy-v1.yaml"
-      - "scripts/check_error_class_parity.py"
-      - "scripts/_verify_local_vendored.py"
+      - "requirements-ci.txt"
   workflow_dispatch:
 
 permissions:
@@ -34,6 +46,9 @@ jobs:
   parity:
     name: SDK ↔ policy error_class parity
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Measured runtime ~8s; the job now runs on EVERY PR (required check), so
+    # an unbounded hang would burn the 360-minute default on a billed runner.
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -43,15 +58,20 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install dev deps
+      - name: Install dev deps (hash-pinned)
         # Note: no liboqs install needed — the parity check AST-walks the
         # vendored `_verify_local.py` source file directly and never imports
-        # the SDK. See scripts/check_error_class_parity.py module docstring
-        # for why we vendor (aegis-governance>=0.5.0 not on PyPI; source
-        # repo is private).
+        # the SDK. See scripts/check_error_class_parity.py module docstring.
+        #
+        # requirements-ci.txt is the hash-pinned lockfile compiled from the
+        # dev requirements — see its header for the threat model and the
+        # regeneration command. No `pip install --upgrade pip` either: that
+        # was itself an unpinned live-PyPI install, the class this closes.
+        # --only-binary=:all: closes the hashed-sdist fallback (build deps
+        # would arrive unpinned from live PyPI); see tests.yml for detail.
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          python -m pip install --no-deps --require-hashes --only-binary=:all: -r requirements-ci.txt
+          python -m pip check
 
       - name: Run parity check
         run: python scripts/check_error_class_parity.py

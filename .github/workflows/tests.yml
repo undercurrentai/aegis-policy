@@ -33,8 +33,10 @@ name: Tests
 # and needs an admin-configured secret. Manual dispatch is not coverage. Closing
 # that is tracked separately; do not read this check as covering it.
 #
-# Measured on a clean venv (requirements-dev.txt only, no httpx/openai/aegis-sdk):
-# 92 passed, 19 deselected, 0 skipped.
+# Measured on a clean venv (requirements-ci.txt only, no httpx/openai/aegis-sdk):
+# 122 passed, 19 deselected, 0 skipped (2026-07-29 — was "92 passed" at #36,
+# which was already stale by six invariant tests the moment it merged; treat
+# this line as a rough scale marker, not a pinned count).
 
 on:
   pull_request:
@@ -60,6 +62,12 @@ jobs:
     # which is what an accidentally-unbounded subprocess would burn.
     timeout-minutes: 10
     strategy:
+      # fail-fast stays FALSE and is load-bearing: both matrix legs are
+      # required checks in org ruleset 16294975 ("Test suite (py3.12)" and
+      # "Test suite (py3.13)"). With fail-fast true, one leg's failure
+      # CANCELS its sibling on the same head SHA, and a `cancelled` required
+      # check blocks the merge while offering nothing to re-read or re-run in
+      # place — a non-obvious wedge. Guarded by tests/test_workflow_invariants.py.
       fail-fast: false
       matrix:
         # 3.12 is what `ai-second-review.yml` actually runs gpt_review.py on;
@@ -74,15 +82,28 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install test dependencies
-        # requirements-dev.txt only. httpx/openai are deliberately NOT installed:
+      - name: Install test dependencies (hash-pinned)
+        # requirements-ci.txt is the hash-pinned lockfile compiled from
+        # requirements-dev.txt — see its header for the threat model and the
+        # regeneration command. `--no-deps --require-hashes` installs exactly
+        # the named artifacts and resolves nothing at run time; `pip check`
+        # proves the closure is complete. No `pip install --upgrade pip`
+        # either: that was itself an unpinned live-PyPI install, the class
+        # this step closes.
+        #
+        # httpx/openai are still deliberately absent:
         # tests/test_gpt_review_failure_detail.py stubs them when absent so its
         # security assertions run in any environment. If a future test genuinely
-        # needs them, add them to requirements-dev.txt rather than installing
-        # ad hoc here, so local and CI environments stay identical.
+        # needs a new package, add it to requirements-dev.txt and regenerate
+        # the lockfile, so local and CI environments stay aligned.
+        # `--only-binary=:all:` closes the hashed-sdist fallback: pip's
+        # hash-checking mode accepts a hashed sdist when no compatible wheel
+        # exists, then fetches its BUILD dependencies (setuptools et al.) from
+        # live PyPI unpinned and unhashed — reproduced during the v1.4.0
+        # audit. Wheel-only turns that scenario into a fail-closed error.
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          python -m pip install --no-deps --require-hashes --only-binary=:all: -r requirements-ci.txt
+          python -m pip check
 
       - name: Run test suite
         # `-m "not needs_secrets"`, not `--ignore=<path>`: the exclusion is a

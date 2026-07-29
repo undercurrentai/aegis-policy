@@ -1403,7 +1403,15 @@ jobs:
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner, repo, pull_number: prNumber, per_page: 100,
             });
-            const changed = files.map((f) => f.filename);
+            // A renamed file arrives as ONE entry whose `filename` is the NEW
+            // path; the old path is only in `previous_filename`. Without the
+            // old path, a PR that renames a bare-filename trust-spine entry
+            // (pytest.ini, .gitignore, a lockfile) to an unprotected name
+            // matches no glob and falls to the `*` CODEOWNERS line where the
+            // machine-user IS a code owner — rename-blindness, found by the
+            // v1.4.0 audit. Both sides of a rename are trust-spine input.
+            const changed = files.flatMap((f) =>
+              f.previous_filename ? [f.filename, f.previous_filename] : [f.filename]);
             const trustSpineHit = changed.find((f) => globs.some((g) => matchesGlob(f, g)));
             if (trustSpineHit) {
               return decide('block',

@@ -12,25 +12,30 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - "policy/verifier-policy-v1.yaml"
-      - "keys/**"
-      - "scripts/check_fingerprints.py"
-      - ".github/workflows/fingerprint-parity.yml"
-      - "requirements-dev.txt"
+    # NO `paths:` filter — deliberately, per cosmic-flute §48.15 R2, the same
+    # anti-skipped-check-hang rule aegis-enforce-caller.yml already carries:
+    # this job is a REQUIRED status check in org ruleset 16294975, and a
+    # required check that never reports sits at "Expected" forever. The old
+    # filter made every PR touching none of the filtered paths structurally
+    # unmergeable in-band — verified on #33, #34, #35, each missing 2 of 5
+    # required checks. The job is ~8s and asserts a repo-state invariant, so
+    # it passes on any PR regardless of what that PR changed. Guarded by
+    # tests/test_workflow_invariants.py::TestRequiredCheckWorkflowsHaveNoPathsFilter.
   push:
     branches:
       - main
-    # Mirror the pull_request paths exactly. Asymmetry between PR and push
-    # triggers is a common CI antipattern: if a workflow-file or deps-file
-    # change ever lands on main without a PR (admin merge / direct push),
-    # the gate must still re-run for the change to be visible in CI history.
+    # push keeps its path scope: post-merge visibility for direct/admin pushes
+    # that touch the gate's inputs. The pull_request trigger above is
+    # deliberately UNFILTERED (it is a required check — see the note there),
+    # so PR coverage is a strict superset of this list and the old "mirror the
+    # pull_request paths exactly" rule no longer applies in that direction.
     paths:
       - "policy/verifier-policy-v1.yaml"
       - "keys/**"
       - "scripts/check_fingerprints.py"
       - ".github/workflows/fingerprint-parity.yml"
       - "requirements-dev.txt"
+      - "requirements-ci.txt"
   workflow_dispatch:
 
 permissions:
@@ -40,6 +45,9 @@ jobs:
   parity:
     name: keys/ ↔ required_keyids SHA-256 parity
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Measured runtime ~8s; the job now runs on EVERY PR (required check), so
+    # an unbounded hang would burn the 360-minute default on a billed runner.
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -49,16 +57,23 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install dev deps
+      - name: Install dev deps (hash-pinned)
         # Needs `cryptography` for Ed25519 PEM → raw 32B extraction, plus
         # `pyyaml` to load policy/verifier-policy-v1.yaml. ML-DSA-65 bytes
         # are already raw on disk (keys/mldsa65-public.bin) — no extraction
         # at gate time. The X.509 ASN.1 extraction utility
         # (scripts/extract_mldsa65_raw.py) is for key-rotation operators,
         # not the parity gate.
+        #
+        # requirements-ci.txt is the hash-pinned lockfile compiled from the
+        # dev requirements — see its header for the threat model and the
+        # regeneration command. No `pip install --upgrade pip` either: that
+        # was itself an unpinned live-PyPI install, the class this closes.
+        # --only-binary=:all: closes the hashed-sdist fallback (build deps
+        # would arrive unpinned from live PyPI); see tests.yml for detail.
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          python -m pip install --no-deps --require-hashes --only-binary=:all: -r requirements-ci.txt
+          python -m pip check
 
       - name: Run fingerprint-parity check
         run: python scripts/check_fingerprints.py
