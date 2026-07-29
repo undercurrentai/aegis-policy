@@ -31,3 +31,15 @@ aegis-governance[verify]==1.0.0
 # requirements-dev.txt).
 pytest>=8.0,<10
 PyYAML>=6.0
+
+# KNOWN OPEN VULN, blocked upstream — Dependabot alert #1 (HIGH: vulnerable
+# bundled OpenSSL in cryptography wheels < 48.0.1). The obvious fix — a
+# `cryptography>=48.0.1` floor here — is UNSATISFIABLE: every released
+# aegis-governance[verify] (1.0.0 through 1.3.1, checked against PyPI
+# metadata 2026-07-29) pins `cryptography<47.0.0,>=46.0.7`. The unblock is
+# an aegis-governance release that widens the cap; then add the floor here
+# and regenerate. Deliberately left OPEN (not dismissed): the alert is the
+# honest signal. Exposure assessment in docs/roadmap.md — this venv verifies
+# committed fixtures offline on an ephemeral no-secret runner; the vulnerable
+# surface (bundled OpenSSL) is TLS/network-facing code the tests never
+# exercise.

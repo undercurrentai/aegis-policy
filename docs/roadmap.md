@@ -57,6 +57,27 @@ team members; no PR). Then consider the 2-of-N hardening the CODEOWNERS header d
 
 **Tracking:** `docs/operations/trust-spine-break-glass.md`; cosmic-flute §34.17.2
 
+### Dependabot alert #1 — cryptography < 48.0.1, blocked on an aegis-governance release
+
+**Status:** 🔴 OPEN, blocked upstream — surfaced 2026-07-29, minutes after `requirements-verify-ci.txt`
+first landed (#39).
+
+The verifier-kit lockfile pins `cryptography==46.0.7`, inside the HIGH-severity vulnerable range
+(< 48.0.1, vulnerable bundled OpenSSL in the wheels). A `>=48.0.1` floor is **unsatisfiable**:
+every released `aegis-governance[verify]` (1.0.0–1.3.1, PyPI metadata checked 2026-07-29) pins
+`cryptography<47.0.0,>=46.0.7`. The alert is deliberately left open, not dismissed — it is the
+honest signal that the fix is pending.
+
+**Exposure, assessed honestly:** the vulnerable surface is the bundled OpenSSL, i.e. TLS/network
+code paths. The verifier-kit job verifies committed fixtures **offline** on an ephemeral,
+no-secret runner; its tests open no TLS connections. Real but small; not a reason to unpin.
+
+**Unblock (in aegis-governance, not this repo):** widen the `verify` extra's cap (e.g.
+`cryptography>=46.0.7,<50`), release (1.3.2+), then here: bump `requirements-verify.txt`'s SDK
+pin deliberately, add the `cryptography>=48.0.1` floor, regenerate the lockfile, and re-verify
+the 19 fixture tests against the new SDK before merging (wire-format stability is unproven
+across SDK versions — that re-verification is the point of the exact pin).
+
 ### Promote `Verifier kit (py3.13)` to a required check
 
 **Status:** 🟡 WAITING on run history — decision taken 2026-07-29 (plan `expressive-honking-lake`,
