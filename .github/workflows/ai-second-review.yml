@@ -281,6 +281,7 @@ jobs:
         run: pip install --quiet "openai>=2.11"
 
       - name: Run gpt-5.4-pro review
+        id: gpt    # referenced as steps.gpt.outcome by the fallback placeholder below
         if: steps.diff.outputs.diff_empty != 'true'
         working-directory: aegis-policy-base    # script SOURCED FROM BASE (trusted)
         env:
@@ -306,9 +307,18 @@ jobs:
         # always() so a failed review step still posts the fallback
         # markdown that gpt_review.py writes before exiting non-zero.
         if: always() && steps.diff.outputs.diff_empty != 'true'
+        env:
+          GPT_STEP_OUTCOME: ${{ steps.gpt.outcome }}
         run: |
           if [ ! -s gpt_review.md ]; then
-            printf '_Review produced no output. Check the workflow logs for details._\n' > gpt_review.md
+            # Reaching here means gpt_review.py wrote NOTHING — its own
+            # top-level safety net also failed, or Python never started. That is
+            # precisely the case with the least information available, so the
+            # step outcome is the only signal left; naming it beats "check the
+            # logs". Symmetric with the Codex lane's placeholder.
+            # shellcheck disable=SC2016  # backticks are literal Markdown here.
+            printf '_Review produced no output (gpt-5.4-pro step: `%s`). **Infrastructure failure, not a review verdict — nothing was assessed.** See the `Run gpt-5.4-pro review` step log._\n' \
+              "${GPT_STEP_OUTCOME:-unknown}" > gpt_review.md
           fi
           delimiter="__AEGIS_REVIEW_BODY_EOF_${{ github.run_id }}__"
           {
@@ -615,9 +625,24 @@ jobs:
 
       - name: Load review body into env
         if: always() && steps.diff.outputs.diff_empty != 'true'
+        env:
+          CODEX_STEP_OUTCOME: ${{ steps.codex.outcome }}
         run: |
           if [ ! -s codex_review.md ]; then
-            printf '_Codex review produced no output. Check the workflow logs for details._\n' > codex_review.md
+            # Say WHY, not just THAT. "produced no output — check the logs" is an
+            # absence-of-signal message: it reads as a flaky model, so four
+            # consecutive identical failures (#30/#32/#33/#34) looked like noise
+            # rather than one persistent operator-actionable fault. The real
+            # cause sat in the step log the whole time:
+            #   ERROR: stream disconnected before completion: Your account is
+            #   not active, please check your billing details on our website.
+            # An unfunded API account and a genuine model failure are different
+            # facts needing different responses; a placeholder that cannot tell
+            # them apart sends the reader somewhere useless.
+            # shellcheck disable=SC2016  # backticks are literal Markdown here,
+            # not command substitution; %s is expanded by printf's argument.
+            printf '_Codex review produced no output (Codex CLI step: `%s`). **Infrastructure failure, not a review verdict — nothing was assessed.** See the `Run Codex review` step log. Most common cause: an inactive or unfunded OpenAI account (`Your account is not active, please check your billing details`)._\n' \
+              "${CODEX_STEP_OUTCOME:-unknown}" > codex_review.md
           fi
           delimiter="__AEGIS_REVIEW_BODY_EOF_${{ github.run_id }}__"
           {

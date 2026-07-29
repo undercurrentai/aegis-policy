@@ -86,12 +86,69 @@ _SECRET_PATTERNS = (
 )
 
 
-def _safe_exc(exc: BaseException) -> str:
-    """Render exc safely — strips API key prefixes that some SDK versions leak."""
-    text = f"{type(exc).__name__}: {exc}"
+def _safe_text(text: str) -> str:
+    """Strip API-key-shaped substrings from any text bound for a public surface.
+
+    Every `_write_fallback` reason is rendered into `gpt_review.md`, which is
+    posted verbatim as a PR comment on a PUBLIC repository. Anything reaching
+    that path must be sanitized, not just exception strings — API-sourced error
+    messages qualify (OpenAI echoes a partially-masked key in some auth errors,
+    e.g. "Incorrect API key provided: sk-...").
+    """
     for pat in _SECRET_PATTERNS:
         text = pat.sub("<redacted-secret>", text)
     return text
+
+
+def _safe_exc(exc: BaseException) -> str:
+    """Render exc safely — strips API key prefixes that some SDK versions leak."""
+    return _safe_text(f"{type(exc).__name__}: {exc}")
+
+
+def _failure_detail(final: Any) -> str:
+    """Why a non-completed Responses API result failed, as a sanitized suffix.
+
+    Returns "" when the API supplied nothing usable, so the caller degrades to
+    the bare status rather than inventing a reason.
+
+    Reporting only the status made every non-completed run look identical —
+    "response status was 'failed'" says nothing about WHY, leaving an
+    account/billing fault, a capacity error, and a content filter
+    indistinguishable. That cost real diagnostic time on 2026-07-28: the Codex
+    lane failed with an explicit "Your account is not active, please check your
+    billing details" while this lane failed opaquely, so whether the two shared
+    a cause could not be settled from CI output at all. The reason was on
+    `response.error` the whole time and was being discarded.
+
+    Extracted from the caller so this path is unit-testable: it is
+    security-relevant (see the sanitization note below) and inline code inside
+    `_main_impl` could not be exercised without a full API round trip.
+
+    SANITIZED, not raw. The returned text is written into `gpt_review.md`, which
+    is posted verbatim as a PR comment on a PUBLIC repository. The message is
+    API-sourced, and OpenAI echoes a partially-masked key in some auth errors
+    ("Incorrect API key provided: sk-..."). Every other `_write_fallback` call
+    site already routes through the sanitizer via `_safe_exc`; an API-sourced
+    string is no more trustworthy than an exception string, so it takes the
+    same path.
+    """
+
+    def _field(obj: Any, name: str) -> Any:
+        if obj is None:
+            return None
+        return getattr(obj, name, None) or (
+            obj.get(name) if isinstance(obj, dict) else None
+        )
+
+    err = getattr(final, "error", None)
+    parts = [str(p) for p in (_field(err, "code"), _field(err, "message")) if p]
+    if parts:
+        return _safe_text(f" — {': '.join(parts)}")
+
+    reason = _field(getattr(final, "incomplete_details", None), "reason")
+    if reason:
+        return _safe_text(f" — incomplete: {reason}")
+    return ""
 
 
 def _int_env(name: str, default: int) -> int:
@@ -574,11 +631,23 @@ def _main_impl(args: argparse.Namespace) -> int:
 
     status = getattr(final, "status", None)
     if status != "completed":
+        # Surface the API's own error object. Reporting only the status made
+        # every non-completed run look identical — "response status was
+        # 'failed'" tells a reader nothing about WHY, so an account/billing
+        # fault, a capacity error, and a content filter are indistinguishable.
+        #
+        # This cost real time on 2026-07-28: the Codex lane failed with an
+        # explicit "Your account is not active, please check your billing
+        # details" while this lane failed opaquely, so whether the two shared a
+        # cause could not be settled from CI output at all. The Responses API
+        # returns the reason on `response.error`; it was being discarded.
+        detail = _failure_detail(final)
+
         _write_fallback(
             args.output,
-            f"response status was {status!r}, not completed",
+            f"response status was {status!r}, not completed{detail}",
         )
-        sys.stderr.write(f"gpt_review: non-completed status: {status}\n")
+        sys.stderr.write(f"gpt_review: non-completed status: {status}{detail}\n")
         return 5
 
     markdown = _extract_text(final).strip()
