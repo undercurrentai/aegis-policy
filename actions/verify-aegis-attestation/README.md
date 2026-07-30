@@ -55,7 +55,7 @@ See [`REUSABLE-WORKFLOW.md`](REUSABLE-WORKFLOW.md) for full docs on the reusable
 | `policy-version-expected` | no | `""` | Strict-equal check against `envelope.predicate.governance.policy_version`. When empty, reads this repo's `policy/verifier-policy-v1.yaml policy_version` (currently `2.1.0`). |
 | `replay-store-path` | no | `""` | Workspace-relative path to an append-only replay-detection file. Set to enable consumer-owned replay detection (see §Replay detection below). |
 | `python-version` | no | `3.13` | Python version for `setup-python`. |
-| `aegis-sdk-version` | no | `1.0.0` | PyPI version pin for `aegis-governance[verify]`. Used when `aegis-sdk-git-ref` is empty. |
+| `aegis-sdk-version` | no | `1.4.0` | PyPI version pin for `aegis-governance[verify]`. Used when `aegis-sdk-git-ref` is empty. |
 | `aegis-sdk-git-ref` | no | `""` | Optional Git ref (commit SHA / tag / branch) to install `aegis-sdk` from. When set, overrides `aegis-sdk-version` (the PyPI default, which is the standard path — task #59 shipped 2026-05-15). See §Installation source below. |
 
 ---
@@ -78,12 +78,12 @@ See [`REUSABLE-WORKFLOW.md`](REUSABLE-WORKFLOW.md) for full docs on the reusable
 
 ## Installation source
 
-**Default (recommended): public PyPI.** `aegis-governance[verify]` has been published to PyPI since 2026-05-15 (task #59, AU-N-1) — the action's default `aegis-sdk-version: 1.0.0` installs it with no secret, no extra input:
+**Default (recommended): public PyPI.** `aegis-governance[verify]` has been published to PyPI since 2026-05-15 (task #59, AU-N-1) — the action's default `aegis-sdk-version: 1.4.0` installs it with no secret, no extra input:
 
 ```yaml
 - uses: undercurrentai/aegis-policy/actions/verify-aegis-attestation@<sha>
   with:
-    # no aegis-sdk-* inputs needed — installs aegis-governance[verify]==1.0.0 from PyPI
+    # no aegis-sdk-* inputs needed — installs aegis-governance[verify]==1.4.0 from PyPI
     # ...
 ```
 
@@ -267,7 +267,7 @@ Per ADR-001 §Decision and cosmic-flute §17 Critical 3:
 This action's behavior is governed by:
 
 1. **`policy/verifier-policy-v1.yaml policy_version`** — currently `2.1.0` (MINOR bump for `replay_detection:` block). Consumer pinning a SHA from before v2.1.0 (i.e., from before 2026-05-13) gets v2.0.0 behavior with NO action-level replay detection support.
-2. **`aegis-sdk` version** — pinned via `aegis-sdk-version` input (default `1.0.0`) OR `aegis-sdk-git-ref`.
+2. **`aegis-sdk` version** — pinned via `aegis-sdk-version` input (default `1.4.0`) OR `aegis-sdk-git-ref`.
 3. **`keys/*` fingerprints** — currently from Sprint 5/E1.5 ceremony 2026-05-10. Rotations follow `docs/key-rotation-runbook.md` + bump `policy_version` MAJOR.
 
 ---

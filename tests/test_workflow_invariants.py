@@ -950,6 +950,33 @@ class TestAggregatorAbsentLaneDiagnostics:
         )
 
 
+class TestSdkDefaultParity:
+    """The consumer-facing aegis-sdk-version default is declared in TWO
+    places — the composite action and the reusable verify workflow. The
+    roadmap's own warning: a bump touching one site strands the other, and
+    (verified in the v1.5.0 scoping) no test pinned either default. Equality
+    — not a hardcoded version — is the invariant, so routine bumps don't
+    churn this test but a strand fails it loudly."""
+
+    def test_both_default_sites_agree(self):
+        composite = yaml.safe_load(
+            (REPO_ROOT / "actions" / "verify-aegis-attestation" / "action.yml").read_text()
+        )
+        reusable = yaml.safe_load(REUSABLE_WORKFLOW.read_text())
+        c_default = composite["inputs"]["aegis-sdk-version"]["default"]
+        on_block = reusable.get(True) or reusable.get("on")
+        r_default = on_block["workflow_call"]["inputs"]["aegis-sdk-version"]["default"]
+        assert c_default == r_default, (
+            f"aegis-sdk-version default STRANDED: composite action.yml says "
+            f"{c_default!r} but the reusable workflow says {r_default!r} — "
+            f"the two public surfaces must move together (docs/roadmap.md "
+            f"two-site warning, now enforced)."
+        )
+        assert re.fullmatch(r"\d+\.\d+\.\d+", str(c_default)), (
+            f"default must be an exact X.Y.Z pin, got {c_default!r}"
+        )
+
+
 class TestAggregatorReviewedSurfaceSubset:
     """A binding auto-approval requires changed-files ⊆ reviewed surface.
 

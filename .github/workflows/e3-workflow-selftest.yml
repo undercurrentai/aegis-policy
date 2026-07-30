@@ -27,6 +27,24 @@ name: E3 Reusable Workflow Self-Test
 # Reuses the same E2-shipped test fixtures (tests/fixtures/envelope-*.json +
 # tests/fixtures/test-keys/ + tests/fixtures/policy-test-v1.yaml + the
 # manifest.json digests captured by tests/fixtures/generate_fixtures.py).
+#
+# PATH SHAPE (v1.5.0 fix, from this workflow's FIRST-EVER run 2026-07-30 —
+# and its gate review, which caught the first fix over-prefixing): the three
+# input kinds resolve against DIFFERENT bases in scripts/verify_action.py:
+#   * envelope `@`-paths       -> GITHUB_WORKSPACE  (verify_action.py ~:271)
+#   * internal-*-override paths-> REPO_ROOT = the checked-out aegis-policy
+#                                 tree, wherever it sits (~:116-129)
+# The reusable workflow self-checks-out aegis-policy into the `aegis-policy/`
+# SUBDIR of its fresh workspace (§37.18 resolver), so ONLY the envelope
+# @-paths of the four reusable-workflow invocations carry the `aegis-policy/`
+# prefix; override paths stay repo-root-relative everywhere, and the
+# composite-direct replay-second job (root checkout) stays unprefixed
+# entirely. The baseline failure signature proves this split: the 1.0.0
+# dispatch died AttestationEnvelopeShapeInvalid — a class only reachable
+# AFTER keys/policy loaded, i.e. the overrides were already resolving.
+# NB for consumers: the same fresh-workspace fact means a consumer `@path`
+# envelope from THEIR repo is never present — pass inline JSON instead
+# (docs follow-up tracked in docs/roadmap.md).
 # Hard-coded `expected-digest` values match the current committed manifest;
 # if fixtures are regenerated locally, these MUST be updated to match the new
 # manifest (see the fixture-digest caveat on e2-action-selftest.yml's happy-path assert step).
@@ -46,7 +64,7 @@ jobs:
     name: Reusable workflow — happy path
     uses: ./.github/workflows/aegis-verify-attestation.yml
     with:
-      envelope: "@tests/fixtures/envelope-valid-preview.json"
+      envelope: "@aegis-policy/tests/fixtures/envelope-valid-preview.json"
       expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
       expected-environment: "preview"
       replay-store-path: ".aegis-replay-e3-happy.log"
@@ -81,7 +99,7 @@ jobs:
     name: Reusable workflow — tampered digest
     uses: ./.github/workflows/aegis-verify-attestation.yml
     with:
-      envelope: "@tests/fixtures/envelope-tampered-digest.json"
+      envelope: "@aegis-policy/tests/fixtures/envelope-tampered-digest.json"
       expected-digest: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
       expected-environment: "preview"
       internal-fixture-mode: "1"
@@ -121,7 +139,7 @@ jobs:
     name: Reusable workflow — expired envelope
     uses: ./.github/workflows/aegis-verify-attestation.yml
     with:
-      envelope: "@tests/fixtures/envelope-expired.json"
+      envelope: "@aegis-policy/tests/fixtures/envelope-expired.json"
       expected-digest: "1ff5ccc05032641ada6f8a57995e2184e4da9f21672879fdaca61ba8b71e2bb5"
       expected-environment: "preview"
       internal-fixture-mode: "1"
@@ -155,7 +173,7 @@ jobs:
     name: Reusable workflow — replay store (first call)
     uses: ./.github/workflows/aegis-verify-attestation.yml
     with:
-      envelope: "@tests/fixtures/envelope-valid-preview.json"
+      envelope: "@aegis-policy/tests/fixtures/envelope-valid-preview.json"
       expected-digest: "b1c2b39da1643ce84d21d4f9fd496a6538677eba057eef4e7bdb104b9a0c3f89"
       expected-environment: "preview"
       replay-store-path: ".aegis-replay-e3-test.log"

@@ -18,8 +18,9 @@
 # exactly that: DSSE wire format documented byte-identical since 1.0.0,
 # `_verify_local` drift since the vendored ref proven formatting-only, and
 # the 19 fixture tests re-run green against the 1.4.0 wheel BEFORE the bump.
-# NB: action.yml's consumer-facing default stays at its own version — that is
-# a separate, deliberate contract decision, not implied by this CI pin.
+# NB: action.yml's consumer-facing default is its own contract surface (bumped
+# to 1.4.0 in v1.5.0, kept equal across both declaration sites by
+# TestSdkDefaultParity) — this CI pin and that default move independently.
 #
 # Regenerate the lockfile whenever this file changes (a drift guard in
 # tests/test_workflow_invariants.py fails until you do):
