@@ -88,6 +88,27 @@ name: AI Second Review
 # checkout BASE for scripts/prompts (trusted); fetch PR head as separate
 # ref for diff content only (DATA never executed). Template ready in
 # cosmic-flute §44.20.5 (bootstrap-safe; lands post-§44-Phase-1-merge).
+#
+# REDUCED-QUORUM MODE (ADR-004, 2026-07-30): repo variable AEGIS_REVIEW_QUORUM.
+# ONLY the exact literal 'claude-only' activates it. Any other value fails
+# closed — never widens approval — via one of two paths: a plain typo/'full'/
+# unset keeps all three lanes scheduled under full-quorum rules (today's
+# behavior); a CASE-VARIANT like 'Claude-Only' skips the OpenAI lanes (GHA's
+# `!=` is case-insensitive) while the aggregator's case-sensitive `===`
+# computes 'full', and rule 1 then BLOCKS on the skipped lanes. Both paths
+# land BLOCK with dead OpenAI lanes. In claude-only mode the two OpenAI
+# reviewer jobs skip
+# cleanly (result == 'skipped' — the aggregator BLOCKS if a lane RAN anyway,
+# closing the mid-flight variable-flip race in both directions) and routine PRs
+# are judged on the Claude lane alone under a TIGHTENED envelope: verdict must
+# be APPROVE (COMMENT blocks), Max Concern must be NONE or LOW (MEDIUM blocks),
+# and the diff must be ≤ 25 files / ≤ 800 changed lines. The claude-review job
+# is NEVER skippable and its absence always blocks, in every mode. Trust-spine
+# carve-out, reviewed-surface subset, self-tune D-lock, TOCTOU re-check, and
+# PAT gating are quorum-INDEPENDENT. Restore full quorum with:
+#   gh variable set AEGIS_REVIEW_QUORUM --body full
+# Rationale + risk acceptance: docs/architecture/adr/
+# ADR-004-reduced-quorum-claude-only-2026-07-30.md (review-by 2026-09-28).
 
 on:
   pull_request:
@@ -196,10 +217,19 @@ jobs:
     # future policy changes. Null-safe variant per QG-§44 Phase 2 cycle 3
     # Agent-B Finding E (MEDIUM/C3) — accepts the case where head.repo is null
     # (fork deleted between PR open + re-trigger).
+    #
+    # REDUCED-QUORUM (ADR-004, v1.6.0): when the repo variable
+    # AEGIS_REVIEW_QUORUM is EXACTLY 'claude-only', this OpenAI lane is
+    # SKIPPED cleanly (result=skipped) instead of running and dying on the
+    # unfunded platform account. Unset/typo/'full' -> inequality holds ->
+    # lane runs -> today's fail-closed behavior. The fork-guard OR-chain is
+    # PARENTHESIZED because GHA binds && tighter than || — without parens the
+    # quorum clause would AND onto only the first fork clause.
     if: >-
-      github.event.pull_request.head.repo.fork == false ||
-      github.event.pull_request.head.repo.full_name == github.repository ||
-      github.event.pull_request.head.repo == null
+      vars.AEGIS_REVIEW_QUORUM != 'claude-only' &&
+      ( github.event.pull_request.head.repo.fork == false ||
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        github.event.pull_request.head.repo == null )
     # §44 Phase 2 (cosmic-flute §54): expose verdict + Max Concern token + diff_empty
     # as job outputs so the aggregator-approve job can compute the auto-approve
     # decision via needs.gpt-review.outputs.*. Empty string = absent/unparseable
@@ -208,6 +238,12 @@ jobs:
       verdict: ${{ steps.extract.outputs.verdict }}
       max_concern: ${{ steps.extract.outputs.max_concern }}
       diff_empty: ${{ steps.diff.outputs.diff_empty }}
+      # G4 wire-through (v1.6.0 audit): the in-job enforce step fails on
+      # truncated-diff-APPROVE, but this job is continue-on-error, so that
+      # failure never reaches needs.*. Exporting the flag lets the aggregator
+      # block a binding approval for a diff the model provably did not fully
+      # see (a one-line minified file passes the 25/800 caps at >200 KB).
+      diff_truncated: ${{ steps.diff.outputs.diff_truncated }}
       # The review step's own outcome, exported so the aggregator can name
       # the real failure: this job is continue-on-error, so needs.*.result
       # says success even when the lane died. #35 wired step outcome into
@@ -536,17 +572,26 @@ jobs:
     continue-on-error: true  # §44 Phase 1 advisory
     # G3 fork-guard symmetry per cosmic-flute §45.12.5.1 (partial; full closure
     # in C5). Same pattern as gpt-review — see that job's `if:` block for full
-    # rationale. Null-safe variant per QG-§44 Phase 2 cycle 3 Agent-B Finding E.
+    # rationale (incl. the REDUCED-QUORUM skip clause + the parenthesization
+    # note, ADR-004). Null-safe variant per QG-§44 Phase 2 cycle 3 Agent-B
+    # Finding E.
     if: >-
-      github.event.pull_request.head.repo.fork == false ||
-      github.event.pull_request.head.repo.full_name == github.repository ||
-      github.event.pull_request.head.repo == null
+      vars.AEGIS_REVIEW_QUORUM != 'claude-only' &&
+      ( github.event.pull_request.head.repo.fork == false ||
+        github.event.pull_request.head.repo.full_name == github.repository ||
+        github.event.pull_request.head.repo == null )
     # §44 Phase 2 (cosmic-flute §54): job outputs for aggregator-approve.
     # Symmetric with gpt-review — see that job's outputs block for rationale.
     outputs:
       verdict: ${{ steps.extract.outputs.verdict }}
       max_concern: ${{ steps.extract.outputs.max_concern }}
       diff_empty: ${{ steps.diff.outputs.diff_empty }}
+      # G4 wire-through (v1.6.0 audit): the in-job enforce step fails on
+      # truncated-diff-APPROVE, but this job is continue-on-error, so that
+      # failure never reaches needs.*. Exporting the flag lets the aggregator
+      # block a binding approval for a diff the model provably did not fully
+      # see (a one-line minified file passes the 25/800 caps at >200 KB).
+      diff_truncated: ${{ steps.diff.outputs.diff_truncated }}
       # The review step's own outcome, exported so the aggregator can name
       # the real failure: this job is continue-on-error, so needs.*.result
       # says success even when the lane died. #35 wired step outcome into
@@ -873,6 +918,12 @@ jobs:
       verdict: ${{ steps.verdict.outputs.verdict }}
       max_concern: ${{ steps.verdict.outputs.max_concern }}
       diff_empty: ${{ steps.diff.outputs.diff_empty }}
+      # G4 wire-through (v1.6.0 audit): the in-job enforce step fails on
+      # truncated-diff-APPROVE, but this job is continue-on-error, so that
+      # failure never reaches needs.*. Exporting the flag lets the aggregator
+      # block a binding approval for a diff the model provably did not fully
+      # see (a one-line minified file passes the 25/800 caps at >200 KB).
+      diff_truncated: ${{ steps.diff.outputs.diff_truncated }}
       # The review step's own outcome, exported so the aggregator can name
       # the real failure: this job is continue-on-error, so needs.*.result
       # says success even when the lane died. #35 wired step outcome into
@@ -1319,18 +1370,25 @@ jobs:
           GPT_VERDICT: ${{ needs.gpt-review.outputs.verdict }}
           GPT_CONCERN: ${{ needs.gpt-review.outputs.max_concern }}
           GPT_EMPTY: ${{ needs.gpt-review.outputs.diff_empty }}
+          GPT_TRUNC: ${{ needs.gpt-review.outputs.diff_truncated }}
           GPT_RESULT: ${{ needs.gpt-review.result }}
           GPT_STEP: ${{ needs.gpt-review.outputs.step_outcome }}
           CODEX_VERDICT: ${{ needs.codex-review.outputs.verdict }}
           CODEX_CONCERN: ${{ needs.codex-review.outputs.max_concern }}
           CODEX_EMPTY: ${{ needs.codex-review.outputs.diff_empty }}
+          CODEX_TRUNC: ${{ needs.codex-review.outputs.diff_truncated }}
           CODEX_RESULT: ${{ needs.codex-review.result }}
           CODEX_STEP: ${{ needs.codex-review.outputs.step_outcome }}
           CLAUDE_VERDICT: ${{ needs.claude-review.outputs.verdict }}
           CLAUDE_CONCERN: ${{ needs.claude-review.outputs.max_concern }}
           CLAUDE_EMPTY: ${{ needs.claude-review.outputs.diff_empty }}
+          CLAUDE_TRUNC: ${{ needs.claude-review.outputs.diff_truncated }}
           CLAUDE_RESULT: ${{ needs.claude-review.result }}
           CLAUDE_STEP: ${{ needs.claude-review.outputs.step_outcome }}
+          # Reduced-quorum switch (ADR-004): repo variable, NOT a secret. The
+          # script treats anything other than the exact literal 'claude-only'
+          # as 'full' — strict equality, fail-closed.
+          QUORUM_MODE_RAW: ${{ vars.AEGIS_REVIEW_QUORUM }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
@@ -1347,14 +1405,17 @@ jobs:
               { name: 'gpt-5.4-pro', verdict: (process.env.GPT_VERDICT || '').toUpperCase(),
                 concern: (process.env.GPT_CONCERN || '').toUpperCase(),
                 empty: process.env.GPT_EMPTY === 'true', result: process.env.GPT_RESULT,
+                truncated: process.env.GPT_TRUNC === 'true',
                 stepOutcome: process.env.GPT_STEP },
               { name: 'Codex', verdict: (process.env.CODEX_VERDICT || '').toUpperCase(),
                 concern: (process.env.CODEX_CONCERN || '').toUpperCase(),
                 empty: process.env.CODEX_EMPTY === 'true', result: process.env.CODEX_RESULT,
+                truncated: process.env.CODEX_TRUNC === 'true',
                 stepOutcome: process.env.CODEX_STEP },
               { name: 'Claude', verdict: (process.env.CLAUDE_VERDICT || '').toUpperCase(),
                 concern: (process.env.CLAUDE_CONCERN || '').toUpperCase(),
                 empty: process.env.CLAUDE_EMPTY === 'true', result: process.env.CLAUDE_RESULT,
+                truncated: process.env.CLAUDE_TRUNC === 'true',
                 stepOutcome: process.env.CLAUDE_STEP },
             ];
             const KNOWN_CONCERN = new Set(['NONE', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']);
@@ -1367,12 +1428,46 @@ jobs:
               return decision;
             };
 
+            // ---- reduced-quorum mode (ADR-004, v1.6.0) -------------------
+            // Strict equality: ONLY the exact literal 'claude-only' reduces
+            // the quorum; unset, empty, typo, or 'full' all mean full tri-AI
+            // quorum (the OpenAI lanes then run, die on the unfunded account,
+            // and rule 1 fail-closes — today's behavior, preserved as the
+            // default). No startsWith, no trim, no third mode. Known parser
+            // asymmetry (documented, fail-closed): GHA's `!=` in the job `if:`
+            // is CASE-INSENSITIVE, this `===` is not — so a case-variant like
+            // 'Claude-Only' skips the OpenAI lanes (GHA side) while this side
+            // computes 'full', and rule 1 then BLOCKS on the skipped lanes.
+            // Every divergent value lands BLOCK, never approve.
+            const rawQuorum = process.env.QUORUM_MODE_RAW || '';
+            const effectiveMode = rawQuorum === 'claude-only' ? 'claude-only' : 'full';
+            core.setOutput('quorum_mode', effectiveMode);
+            const claudeLane = reviewers.find((r) => r.name === 'Claude');
+            const active = effectiveMode === 'claude-only' ? [claudeLane] : reviewers;
+
+            // Mode/lane consistency check: in claude-only mode the OpenAI
+            // lanes must have been SKIPPED by the job-level quorum clause
+            // (result === 'skipped'). A lane that RAN under a claude-only
+            // decision means the variable flipped mid-run (either direction)
+            // — never guess across a TOCTOU; fail closed. A lane that ran
+            // and died is 'success' (job continue-on-error) + empty verdict,
+            // which is NOT 'skipped' — ran-and-died is never excused.
+            if (effectiveMode === 'claude-only') {
+              const ranAnyway = reviewers.filter(
+                (r) => r.name !== 'Claude' && r.result !== 'skipped');
+              if (ranAnyway.length) {
+                return decide('block',
+                  `quorum=claude-only but ${ranAnyway.map((r) => r.name).join('+')} ` +
+                  `ran (result != skipped) — mode/lane mismatch, fail-closed (ADR-004)`);
+              }
+            }
+
             // §54.5 rule 0: no signal (empty gated diff) → SKIP. The workflow
             // triggered on a path match but the GATED_PATHS diff is empty (e.g.,
             // a merge commit). Nothing reviewed → no auto-approval; the PR takes
             // the normal review path. Not a block (nothing is wrong) — just no
             // auto-approve to offer.
-            if (reviewers.some((r) => r.empty)) {
+            if (active.some((r) => r.empty)) {
               return decide('skip', 'empty gated diff — no reviewable surface');
             }
 
@@ -1390,7 +1485,10 @@ jobs:
             // log (#35's fix narrative). step_outcome makes the block reason
             // say WHERE to look. The DECISION is unchanged: still
             // fail-closed, only the diagnosis improves.
-            for (const r of reviewers) {
+            // Iterates the ACTIVE lane set (mode-aware): in claude-only mode
+            // only Claude is judged here — and Claude absent/dead still
+            // blocks identically; the Claude lane is never excusable.
+            for (const r of active) {
               if (r.result !== 'success' || !r.verdict) {
                 const step =
                   r.stepOutcome === 'success'
@@ -1406,6 +1504,22 @@ jobs:
                 return decide('block',
                   `reviewer ${r.name} absent (result=${r.result || '?'}, verdict=${r.verdict || '<empty>'}; ${step}) — fail-closed`);
               }
+            }
+
+            // ---- rule 1.5: truncated-diff gate (G4 wire-through, v1.6.0) --
+            // Each lane's in-job G4 enforce step fails on truncated-diff-
+            // APPROVE, but the lanes are continue-on-error: the verdict output
+            // is extracted BEFORE enforcement, so needs.* still hands this
+            // gate verdict=APPROVE with result=success. A model cannot have
+            // verified a surface it did not see; a binding approval on a
+            // truncated diff is unsafe in EVERY quorum mode. (The 25-file/
+            // 800-line caps do not cover this: one minified file can pass
+            // both caps at >200 KB.) Quorum-independent, fail-closed.
+            const truncatedLane = active.find((r) => r.truncated);
+            if (truncatedLane) {
+              return decide('block',
+                `reviewer ${truncatedLane.name} saw a TRUNCATED diff (>200 KB cap) — ` +
+                `its verdict cannot cover the full surface; human review (G4)`);
             }
 
             // ---- trust-spine carve-out (read from TRUSTED base.sha) -------
@@ -1525,6 +1639,60 @@ jobs:
               return decide('block', 'change_class == aegis-self-tune — human-only per §28.5');
             }
 
+            // ---- CLAUDE-ONLY decision branch (ADR-004) -------------------
+            // A CLOSED branch, deliberately separate from the multi-reviewer
+            // rules 2-7 below: those shapes (corroborated dissent, lone-
+            // dissent-as-noise) presuppose multiple reviewers, and threading
+            // one lane through them risks a future refactor letting a lone
+            // REQUEST_CHANGES approve itself. Single-lane approval is
+            // TIGHTER than full quorum: only APPROVE passes (COMMENT
+            // blocks), only NONE/LOW concern passes (MEDIUM blocks — under
+            // full quorum it passes because two other models corroborated),
+            // and the diff must be small (<= 25 files / 800 changed lines,
+            // measured from the same paginated `files` the subset rule used,
+            // so cap-size == reviewed-surface size by construction). What is
+            // LOST in this mode — three-model error decorrelation — is
+            // recorded in ADR-004 with the exit condition; every reason
+            // string carries the quorum tag so the audit record is honest.
+            if (effectiveMode === 'claude-only') {
+              // ADR-004 review-by escalation: WARN, never block — and warn at
+              // the TOP of the branch so block paths past the date carry the
+              // overdue signal too, not just approvals. Auto-blocking on a
+              // date would silently recreate the break-glass treadmill this
+              // mode exists to relieve.
+              const REVIEW_BY = '2026-09-28';
+              if (new Date() > new Date(`${REVIEW_BY}T23:59:59Z`)) {
+                core.warning(`ADR-004 reduced quorum is past its review-by date ` +
+                  `(${REVIEW_BY}) — overdue for re-acceptance; restore full ` +
+                  `quorum or re-ratify the ADR`);
+                core.setOutput('quorum_overdue', 'true');
+              }
+              const cConcern = KNOWN_CONCERN.has(claudeLane.concern)
+                ? claudeLane.concern : 'HIGH';
+              const MAX_FILES = 25, MAX_LINES = 800;
+              const changedFileCount = files.length;
+              const changedLineCount = files.reduce((s, f) => s + (f.changes || 0), 0);
+              if (changedFileCount > MAX_FILES || changedLineCount > MAX_LINES) {
+                return decide('block',
+                  `quorum=claude-only: diff exceeds single-lane cap ` +
+                  `(${changedFileCount} files / ${changedLineCount} lines > ` +
+                  `${MAX_FILES}/${MAX_LINES}) — human review (ADR-004)`);
+              }
+              if (claudeLane.verdict !== 'APPROVE') {
+                return decide('block',
+                  `quorum=claude-only: verdict ${claudeLane.verdict || '<empty>'} — ` +
+                  `only APPROVE passes single-lane (ADR-004)`);
+              }
+              if (cConcern !== 'NONE' && cConcern !== 'LOW') {
+                return decide('block',
+                  `quorum=claude-only: Max Concern ${cConcern} — ` +
+                  `only NONE/LOW pass single-lane (ADR-004)`);
+              }
+              return decide('approve',
+                `quorum=claude-only per ADR-004: Claude APPROVE @ ${cConcern}, ` +
+                `${changedFileCount} files / ${changedLineCount} lines within cap`);
+            }
+
             // ---- verdict / Max Concern gate (§54.5 rules 2-7) ------------
             // Normalize unknown concern tokens to HIGH (fail-closed; §54.5
             // "unparseable severity → HIGH×C3").
@@ -1575,6 +1743,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_REASON: ${{ steps.gate.outputs.reason }}
+          QUORUM_MODE: ${{ steps.gate.outputs.quorum_mode }}
           GPT_VERDICT: ${{ needs.gpt-review.outputs.verdict }}
           GPT_CONCERN: ${{ needs.gpt-review.outputs.max_concern }}
           CODEX_VERDICT: ${{ needs.codex-review.outputs.verdict }}
@@ -1605,17 +1774,30 @@ jobs:
               return;
             }
 
+            const quorum = process.env.QUORUM_MODE || 'full';
+            const reduced = quorum === 'claude-only';
+            const skippedCell = 'skipped (quorum=claude-only)';
             const body =
               '<!-- ai-second-review:aggregator-approve -->\n' +
-              `<!-- run-id:${process.env.GITHUB_RUN_ID} head-sha:${reviewedSha} -->\n\n` +
-              '## ✅ Auto-approved by @aegis-auto-reviewer (cosmic-flute §44 Phase 2)\n\n' +
+              `<!-- run-id:${process.env.GITHUB_RUN_ID} head-sha:${reviewedSha} -->\n` +
+              `<!-- quorum:${quorum}${reduced ? ' decision:ADR-004-2026-07-30' : ''} -->\n\n` +
+              (reduced
+                ? '## ✅ [REDUCED QUORUM: claude-only] Auto-approved by @aegis-auto-reviewer\n\n' +
+                  '**Quorum**: claude-only (reduced — OpenAI lanes unfunded) per ' +
+                  '`docs/architecture/adr/ADR-004-reduced-quorum-claude-only-2026-07-30.md`; ' +
+                  'restore with `gh variable set AEGIS_REVIEW_QUORUM --body full`.\n\n'
+                : '## ✅ Auto-approved by @aegis-auto-reviewer (cosmic-flute §44 Phase 2)\n\n') +
               `**Gate**: ${process.env.GATE_REASON}\n\n` +
               '| Reviewer | Verdict | Max Concern |\n|---|---|---|\n' +
-              `| gpt-5.4-pro | ${process.env.GPT_VERDICT} | ${process.env.GPT_CONCERN} |\n` +
-              `| Codex | ${process.env.CODEX_VERDICT} | ${process.env.CODEX_CONCERN} |\n` +
+              `| gpt-5.4-pro | ${reduced ? skippedCell : process.env.GPT_VERDICT} | ${reduced ? '—' : process.env.GPT_CONCERN} |\n` +
+              `| Codex | ${reduced ? skippedCell : process.env.CODEX_VERDICT} | ${reduced ? '—' : process.env.CODEX_CONCERN} |\n` +
               `| Claude | ${process.env.CLAUDE_VERDICT} | ${process.env.CLAUDE_CONCERN} |\n\n` +
               'Binding code-owner approval substituting for the missing second human reviewer on a routine PR ' +
-              '(non-trust-spine, non-self-tune, 3-AI consensus). Trust-spine + self-tune + AEGIS-escalated PRs ' +
+              (reduced
+                ? '(non-trust-spine, non-self-tune, SINGLE-lane Claude verdict under the tightened ADR-004 envelope ' +
+                  '— NOT 3-AI consensus). '
+                : '(non-trust-spine, non-self-tune, 3-AI consensus). ') +
+              'Trust-spine + self-tune + AEGIS-escalated PRs ' +
               'remain human-only. Accountable human reviewer: @ThermoclineLeviathan.';
 
             await github.rest.pulls.createReview({
@@ -1631,6 +1813,8 @@ jobs:
         env:
           DECISION: ${{ steps.gate.outputs.decision }}
           REASON: ${{ steps.gate.outputs.reason }}
+          QUORUM_MODE: ${{ steps.gate.outputs.quorum_mode }}
+          QUORUM_OVERDUE: ${{ steps.gate.outputs.quorum_overdue }}
           HAS_PAT: ${{ env.HAS_PAT }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GPT_VERDICT: ${{ needs.gpt-review.outputs.verdict }}
@@ -1653,18 +1837,37 @@ jobs:
               : (decision === 'skip' ? '⏭️ no action (empty gated diff)'
                                      : '🔒 routed to human review');
             const icon = decision === 'approve' ? '✅' : decision === 'skip' ? '⏭️' : '🔒';
+            const quorum = process.env.QUORUM_MODE || 'full';
+            const reduced = quorum === 'claude-only';
+            const skippedCell = 'skipped (quorum=claude-only)';
             const marker = '<!-- ai-second-review:aggregator -->';
+            const heading = reduced
+              ? `## ${icon} [REDUCED QUORUM: claude-only] §44 Aggregator — auto-approve gate: \`${decision.toUpperCase()}\``
+              : `## ${icon} §44 Aggregator — auto-approve gate: \`${decision.toUpperCase()}\``;
+            const overdue = process.env.QUORUM_OVERDUE === 'true'
+              ? '**⚠ OVERDUE FOR RE-ACCEPTANCE** — past the ADR-004 review-by date (2026-09-28).\n\n'
+              : '';
+            const quorumLine = reduced
+              ? '**Quorum**: claude-only (reduced — OpenAI lanes unfunded) per ADR-004 (2026-07-30); ' +
+                'restore with `gh variable set AEGIS_REVIEW_QUORUM --body full`.\n\n' + overdue
+              : '';
+            const footnote = reduced
+              ? '---\n*cosmic-flute §44 Phase 2 (§54) under ADR-004 REDUCED QUORUM. Gate: SINGLE-lane Claude ' +
+                'verdict (tightened: APPROVE-only, NONE/LOW-only, ≤25 files/≤800 lines) + trust-spine carve-out ' +
+                '(read from base.sha) + change_class != aegis-self-tune. NOT 3-AI consensus while reduced. ' +
+                'Accountable human: @ThermoclineLeviathan.*'
+              : '---\n*cosmic-flute §44 Phase 2 (§54). Gate: 3-AI finding-class-agreement + trust-spine carve-out ' +
+                '(read from base.sha) + change_class != aegis-self-tune. Signals 4 (AFA) + 5 (AEGIS PROCEED) ' +
+                'are conjunctive AND terms deferred to Phase 3 (#268). Accountable human: @ThermoclineLeviathan.*';
             const body =
-              `${marker}\n\n## ${icon} §44 Aggregator — auto-approve gate: \`${decision.toUpperCase()}\`\n\n` +
+              `${marker}\n\n${heading}\n\n` + quorumLine +
               `**Reason**: ${reason}\n\n**Action**: ${posted}\n\n` +
               `**Reviewed head**: \`${(process.env.PR_HEAD_SHA || '').slice(0, 12)}\`\n\n` +
               '| Reviewer | Verdict | Max Concern |\n|---|---|---|\n' +
-              `| gpt-5.4-pro | ${process.env.GPT_VERDICT || '—'} | ${process.env.GPT_CONCERN || '—'} |\n` +
-              `| Codex | ${process.env.CODEX_VERDICT || '—'} | ${process.env.CODEX_CONCERN || '—'} |\n` +
+              `| gpt-5.4-pro | ${reduced ? skippedCell : (process.env.GPT_VERDICT || '—')} | ${reduced ? '—' : (process.env.GPT_CONCERN || '—')} |\n` +
+              `| Codex | ${reduced ? skippedCell : (process.env.CODEX_VERDICT || '—')} | ${reduced ? '—' : (process.env.CODEX_CONCERN || '—')} |\n` +
               `| Claude | ${process.env.CLAUDE_VERDICT || '—'} | ${process.env.CLAUDE_CONCERN || '—'} |\n\n` +
-              '---\n*cosmic-flute §44 Phase 2 (§54). Gate: 3-AI finding-class-agreement + trust-spine carve-out ' +
-              '(read from base.sha) + change_class != aegis-self-tune. Signals 4 (AFA) + 5 (AEGIS PROCEED) ' +
-              'are conjunctive AND terms deferred to Phase 3 (#268). Accountable human: @ThermoclineLeviathan.*';
+              footnote;
             await core.summary.addRaw(body).write();
             const comments = await github.paginate(github.rest.issues.listComments, {
               owner, repo, issue_number, per_page: 100,

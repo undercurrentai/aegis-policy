@@ -16,10 +16,32 @@ Sprint 5/E3 — closes cosmic-flute task #29. See also:
 
 ```yaml
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      envelope-json: ${{ steps.fetch.outputs.envelope-json }}
+      sha256: ${{ steps.fetch.outputs.sha256 }}
+    steps:
+      - id: fetch
+        run: |
+          # ... build artifact + fetch DSSE envelope from aegis-governance /attest ...
+          # Unique per-run delimiter (GitHub hardening guidance): a fixed
+          # delimiter is an output-injection seam if envelope content can
+          # ever contain it. The bare `echo` guards a missing trailing
+          # newline in the file (the delimiter must start its own line).
+          delim="ENVELOPE_$(openssl rand -hex 8)"
+          {
+            echo "envelope-json<<${delim}"
+            cat artifacts/envelope.json
+            echo
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
+
   verify-attestation:
+    needs: build
     uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>
     with:
-      envelope: "@artifacts/envelope.json"
+      envelope: ${{ needs.build.outputs.envelope-json }}   # inline JSON, NOT "@path"
       expected-digest: ${{ needs.build.outputs.sha256 }}
       expected-environment: production
       replay-store-path: .github/.aegis-replay.log
@@ -36,6 +58,14 @@ jobs:
         env:
           AEGIS_DECISION_ID: ${{ needs.verify-attestation.outputs.decision-id }}
 ```
+
+> **⚠ Do not pass `@path` envelopes to the reusable workflow.** The `verify` job
+> runs in its own fresh workspace, which checks out **aegis-policy** — not your
+> repo. A consumer-repo path like `@artifacts/envelope.json` will never resolve
+> there and verification fails on file-not-found (proven by this repo's own e3
+> self-test on its first dispatch). Pass the envelope **inline** from a prior
+> job's output, as above. This differs from the **composite Action**, which runs
+> inside YOUR job — there `@`-paths resolve against your workspace and are fine.
 
 **Pin by immutable commit SHA, never `@main`** — same rationale as the composite Action (see ADR-001 §Decision).
 
@@ -66,7 +96,7 @@ The reusable workflow's input set is the composite Action's 8 inputs + `runs-on`
 
 | Input | Required | Default | Description |
 |---|---|---|---|
-| `envelope` | YES | — | DSSE envelope JSON. Inline string OR `@path/to/file.json` (workspace-relative). |
+| `envelope` | YES | — | DSSE envelope JSON. Pass **inline** (from a prior job's output). The `@path/to/file.json` form resolves inside the verify job's OWN workspace (an aegis-policy checkout, not your repo), so consumer-repo paths never resolve — see the warning under TL;DR. |
 | `expected-digest` | YES | — | SHA-256 hex (64 lowercase chars) of the subject artifact. |
 | `expected-environment` | YES | — | One of: `production` \| `staging` \| `preview`. |
 | `policy-version-expected` | no | `""` | Strict-equal check. Empty = read from this repo's `policy/verifier-policy-v1.yaml` (currently `2.1.0`). |
@@ -194,20 +224,29 @@ jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-      envelope-path: ${{ steps.fetch.outputs.envelope-path }}
+      envelope-json: ${{ steps.fetch.outputs.envelope-json }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
       - id: fetch
         run: |
           # ... build artifact ...
           # ... fetch attestation envelope from aegis-governance /attest ...
-          echo "envelope-path=artifacts/envelope.json" >> "$GITHUB_OUTPUT"
+          # Emit the envelope CONTENT (not a path) — the reusable workflow's
+          # verify job cannot see this job's workspace (see TL;DR warning).
+          # Unique per-run delimiter + trailing-newline guard, as in TL;DR.
+          delim="ENVELOPE_$(openssl rand -hex 8)"
+          {
+            echo "envelope-json<<${delim}"
+            cat artifacts/envelope.json
+            echo
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
 
   verify-attestation:
     needs: build
     uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>
     with:
-      envelope: "@${{ needs.build.outputs.envelope-path }}"
+      envelope: ${{ needs.build.outputs.envelope-json }}
       expected-digest: ${{ inputs.artifact-sha256 }}
       expected-environment: production
       replay-store-path: .github/.aegis-replay.log
@@ -239,8 +278,17 @@ The verifier itself does NOT check risk_class. Consumers gate downstream:
 ```yaml
 jobs:
   verify-attestation:
+    # envelope passed inline from a build job's output (job elided — see the
+    # deploy-gate example above), per the TL;DR warning: the reusable
+    # workflow's verify job cannot read consumer-repo paths.
+    # (Block mapping, not `with: { ... }` flow style — an unquoted `${{ }}`
+    # inside a YAML flow mapping fails to parse.)
+    needs: build
     uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>
-    with: { envelope: "@artifacts/envelope.json", expected-digest: ${{ ... }}, expected-environment: production }
+    with:
+      envelope: ${{ needs.build.outputs.envelope-json }}
+      expected-digest: ${{ needs.build.outputs.sha256 }}
+      expected-environment: production
     secrets: inherit
 
   extract-risk-class:

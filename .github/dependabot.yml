@@ -18,3 +18,21 @@ updates:
     labels:
       - "dependencies"
       - "python"
+    # aegis-governance is DELIBERATE-BUMP-ONLY (v1.6.0 hardening). An auto-filed
+    # bump PR could never merge: it cannot update the vendored-copy header's
+    # Proven-against line, cannot re-prove the 19 verifier-kit fixtures, and
+    # trips the drift-guard invariant test — it would only sit red. Known cost,
+    # accepted: `ignore` also suppresses Dependabot SECURITY-update PRs for this
+    # one dependency. Compensating controls: (a) Dependabot ALERTS are
+    # unaffected and stay visible; (b) the cryptography>=48.0.1 floor in
+    # requirements-verify.txt guards the known CVE class; (c) house precedent —
+    # alert #1 was deliberately left open and resolved by a manual,
+    # fixture-proven bump (v1.4.1, 2026-07-30).
+    ignore:
+      - dependency-name: "aegis-governance"
+    # Everything else in the pip surface (pytest, PyYAML, yamllint, pip-compile
+    # lockfile pairs) lands as ONE weekly grouped PR instead of a trickle.
+    groups:
+      python-ci-tooling:
+        patterns:
+          - "*"

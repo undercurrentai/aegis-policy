@@ -6,6 +6,11 @@
 # Source SHA:   7e422b2 (main, 2026-05-10; post Sprint 5/E1.5 Phase 4 + audit)
 # Source range: 37f8608..7e422b2 (Sprint 5/E1.5: ML-DSA-65 migration + ADR-012)
 # Vendored on:  2026-05-10 (Sprint 5/E1.5 Phase 5 of cosmic-flute §30)
+# Proven-against: aegis-governance==1.4.0 (2026-07-30)
+#   ^ machine-checked: tests/test_workflow_invariants.py asserts this version
+#     equals the exact pin in requirements-verify.txt. On every deliberate SDK
+#     bump, re-diff this vendored copy against the released source and update
+#     this line — the failing test is the ritual's enforcement, not a nag.
 #
 # Why vendored (2026-05-10-era rationale; the AST-walk half still holds): at
 # vendoring time aegis-governance was private + aegis-sdk unpublished. The SDK
