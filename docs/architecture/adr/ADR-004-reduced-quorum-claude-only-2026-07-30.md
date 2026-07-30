@@ -61,6 +61,14 @@ mode still active, the claude-only branch emits a `core.warning` and the audit b
 "OVERDUE FOR RE-ACCEPTANCE" line — it warns, it does not block (auto-blocking on a date would
 silently recreate the break-glass treadmill this ADR exists to relieve).
 
+## Operational note: self-editing PRs always show a red Claude lane
+
+`claude-code-action`'s app-token exchange refuses to run when the workflow file on the PR branch
+differs from the default branch's copy (anti-tamper). So any PR that edits
+`ai-second-review.yml` — including the PR that shipped this mode — has a structurally dead
+Claude lane. This is benign: `.github/**` is in the trust-spine carve-out, so such PRs are
+human-only in every quorum mode; do not chase the red lane as an outage signal on them.
+
 ## Enforcement
 
 `tests/test_workflow_invariants.py::TestReducedQuorumMode` pins: the fail-closed default shapes
