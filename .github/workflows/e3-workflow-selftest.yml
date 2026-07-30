@@ -277,3 +277,42 @@ jobs:
           test "$VALID" = "false" || { echo "::error::expected valid=false; got $VALID"; exit 1; }
           test "$ERROR_CLASS" = "AttestationReplayDetected" || { echo "::error::expected AttestationReplayDetected; got $ERROR_CLASS"; exit 1; }
           echo "Replay-detected PASS"
+
+  # ---------------------------------------------------------------------------
+  # Single green signal for the whole selftest. The RUN conclusion is `failure`
+  # BY DESIGN (the negative-pair reusable-workflow verify jobs exit 1 on
+  # valid=false — reusable-workflow jobs can't continue-on-error at step level),
+  # so "did e3 pass?" cannot be read from the run badge. This job can: it is
+  # green iff ALL FOUR assert signals concluded success. The replay pair's 4th
+  # signal is `selftest-replay-second` itself (composite invocation with its
+  # own in-job assert step — no separate assert job exists).
+  # `${{ !cancelled() }}` (wrapper mandatory — a bare `!` starts a YAML tag)
+  # runs this job even when an upstream assert failed, so a red dependency
+  # yields a RED summary here, never a skipped/absent one.
+  e3-all-asserts-green:
+    name: E3 summary — all asserts green
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 5
+    needs: [assert-happy-path, assert-tampered-digest, assert-expired, selftest-replay-second]
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Assert all four signals succeeded
+        env:
+          R_HAPPY: ${{ needs.assert-happy-path.result }}
+          R_TAMPER: ${{ needs.assert-tampered-digest.result }}
+          R_EXPIRED: ${{ needs.assert-expired.result }}
+          R_REPLAY: ${{ needs.selftest-replay-second.result }}
+        run: |
+          set -euo pipefail
+          FAILED=0
+          for pair in "happy-path:$R_HAPPY" "tampered-digest:$R_TAMPER" \
+                      "expired:$R_EXPIRED" "replay-second:$R_REPLAY"; do
+            name="${pair%%:*}"; res="${pair#*:}"
+            if [ "$res" = "success" ]; then
+              echo "  OK    $name"
+            else
+              echo "::error::assert signal '$name' concluded '$res' (expected success)"
+              FAILED=1
+            fi
+          done
+          exit "$FAILED"

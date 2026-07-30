@@ -34,14 +34,19 @@ For consumers who prefer job-level invocation over step-level (most new consumer
 ```yaml
 jobs:
   verify-attestation:
+    needs: build
     uses: undercurrentai/aegis-policy/.github/workflows/aegis-verify-attestation.yml@<sha>
     with:
-      envelope: "@artifacts/envelope.json"
+      envelope: ${{ needs.build.outputs.envelope-json }}   # inline JSON, NOT "@path"
       expected-digest: ${{ needs.build.outputs.sha256 }}
       expected-environment: production
 ```
 
-See [`REUSABLE-WORKFLOW.md`](REUSABLE-WORKFLOW.md) for full docs on the reusable workflow surface (when to use it vs. this composite Action, secrets propagation, permissions union, worked examples).
+**Reusable-workflow caveat**: pass the envelope **inline** (from a prior job's
+output), never as `@path` — the reusable workflow's verify job runs in its own
+fresh workspace (an aegis-policy checkout), so consumer-repo paths never
+resolve there. `@`-paths are fine for THIS composite Action, which runs inside
+your own job. See [`REUSABLE-WORKFLOW.md`](REUSABLE-WORKFLOW.md) for full docs on the reusable workflow surface (when to use it vs. this composite Action, secrets propagation, permissions union, worked examples).
 
 ---
 
@@ -190,6 +195,9 @@ jobs:
         id: verify
         uses: undercurrentai/aegis-policy/actions/verify-aegis-attestation@<sha>
         with:
+          # @path is correct HERE: the composite runs inside this job, so the
+          # path resolves against this job's own checkout. (For the REUSABLE
+          # workflow the same @path would NOT resolve — see §Reusable workflow.)
           envelope: "@${{ inputs.envelope-path }}"
           expected-digest: ${{ inputs.artifact-digest }}
           expected-environment: production

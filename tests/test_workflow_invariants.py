@@ -1050,3 +1050,339 @@ class TestAggregatorRenameCoverage:
             "in a condition without emitting the old path is rename-blindness "
             "in different clothes."
         )
+
+
+class TestReducedQuorumMode:
+    """ADR-004 reduced-quorum (`claude-only`) invariants — fail-closed default,
+    Claude-never-skippable, quorum-independent gate ordering, and the tightened
+    single-lane envelope, pinned so none of it can widen or rewire silently.
+
+    The load-bearing subtlety: GH Actions `&&` binds tighter than `||`. AND-ing
+    the quorum clause onto the reviewer jobs' fork-guard REQUIRES the OR-chain
+    to be parenthesized — without parens the clause attaches to only the first
+    fork term and silently changes fork-guard semantics. Positive AND negative
+    shape pins below.
+    """
+
+    # The bare OR-chain (claude-review — no AND clause, so no parens needed)
+    # and the parenthesized form (required wherever the chain is AND-ed).
+    BARE_FORK_GUARD = (
+        "github.event.pull_request.head.repo.fork == false || "
+        "github.event.pull_request.head.repo.full_name == github.repository || "
+        "github.event.pull_request.head.repo == null"
+    )
+    FORK_GUARD = f"( {BARE_FORK_GUARD} )"
+
+    @staticmethod
+    def _norm(s: str) -> str:
+        return " ".join((s or "").split())
+
+    def _doc(self):
+        return yaml.safe_load(AI_SECOND_REVIEW_WORKFLOW.read_text())
+
+    # ---- job-skip side ---------------------------------------------------
+
+    @pytest.mark.parametrize("job", ["gpt-review", "codex-review"])
+    def test_openai_job_guard_is_quorum_clause_and_parenthesized_fork_guard(self, job):
+        cond = self._norm(self._doc()["jobs"][job].get("if", ""))
+        expected = f"vars.AEGIS_REVIEW_QUORUM != 'claude-only' && {self.FORK_GUARD}"
+        assert cond == expected, (
+            f"{job} `if:` must be EXACTLY the quorum inequality AND-ed with the "
+            f"PARENTHESIZED fork-guard OR-chain.\n  got:      {cond}\n"
+            f"  expected: {expected}\nGHA `&&` binds tighter than `||` — an "
+            f"un-parenthesized chain rewires the fork guard, and `==` instead "
+            f"of `!=` inverts fail-closed into fail-open."
+        )
+
+    @pytest.mark.parametrize("job", ["gpt-review", "codex-review"])
+    def test_openai_job_guard_is_not_the_unparenthesized_shape(self, job):
+        cond = self._norm(self._doc()["jobs"][job].get("if", ""))
+        assert not re.match(
+            r"vars\.AEGIS_REVIEW_QUORUM != 'claude-only' && "
+            r"github\.event\.pull_request\.head\.repo\.fork",
+            cond,
+        ), (
+            f"{job} `if:` matches the UN-parenthesized shape — the quorum "
+            f"clause is ANDed onto only the first fork term (precedence trap)."
+        )
+
+    def test_claude_lane_is_never_skippable(self):
+        cond = self._norm(self._doc()["jobs"]["claude-review"].get("if", ""))
+        assert cond == self.BARE_FORK_GUARD, (
+            f"claude-review `if:` must be the bare fork-guard, byte-stable — "
+            f"got: {cond}. Claude is the one lane that must run in EVERY "
+            f"quorum mode; its absence always blocks."
+        )
+        assert "AEGIS_REVIEW_QUORUM" not in cond
+
+    def test_aggregator_guard_has_no_quorum_clause(self):
+        cond = self._norm(self._doc()["jobs"]["aggregator-approve"].get("if", ""))
+        assert cond == f"always() && {self.FORK_GUARD}", (
+            f"aggregator `if:` must stay `always() && (fork-guard)` — it must "
+            f"run in every mode to record the decision; got: {cond}"
+        )
+
+    def test_variable_name_identical_at_all_functional_read_sites(self):
+        """Typo-proofing: a rename at ONE read site silently splits the switch
+        (one side flips, the other doesn't). The `vars.` prefix marks the
+        functional reads; prose/restore-command mentions don't carry it."""
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert wf.count("vars.AEGIS_REVIEW_QUORUM") == 3, (
+            "expected EXACTLY 3 functional reads of vars.AEGIS_REVIEW_QUORUM "
+            "(gpt-review if:, codex-review if:, gate env QUORUM_MODE_RAW)"
+        )
+        assert "QUORUM_MODE_RAW: ${{ vars.AEGIS_REVIEW_QUORUM }}" in wf, (
+            "the aggregator must read the variable via the QUORUM_MODE_RAW env "
+            "wire — reading vars.* inside the script string would bypass the "
+            "strict-equality normalization"
+        )
+
+    # ---- aggregator side -------------------------------------------------
+
+    def test_mode_computation_is_strict_equality_with_full_fallback(self):
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert "rawQuorum === 'claude-only' ? 'claude-only' : 'full'" in wf, (
+            "effectiveMode must be strict-equality with a 'full' fallback — "
+            "any unexpected value (unset/typo/'full') must land in full-quorum "
+            "rules, which BLOCK with dead OpenAI lanes (fail-closed)"
+        )
+        assert "const rawQuorum = process.env.QUORUM_MODE_RAW || '';" in wf, (
+            "rawQuorum must be read raw — no trim/normalize. GHA's `!=` in the "
+            "job `if:` does not trim either, so normalizing here would split "
+            "the switch for padded values (JS side activates while lanes ran)."
+        )
+        assert "core.setOutput('quorum_mode', effectiveMode)" in wf, (
+            "quorum_mode must be exported — the approve/audit bodies key their "
+            "banners off it (v1.6.0's MINOR-triggering output)"
+        )
+
+    def test_consistency_check_never_excuses_a_lane_that_ran(self):
+        """TOCTOU direction A: variable flipped full→claude-only mid-run. A
+        lane that RAN (result != skipped) under a claude-only decision is a
+        mode/lane mismatch and must BLOCK. Direction B (claude-only→full) is
+        closed by rule 1: skipped lanes report result='skipped' → absent →
+        BLOCK. Both directions land fail-closed."""
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert re.search(
+            r"const ranAnyway = reviewers\.filter\(\s*\n?\s*"
+            r"\(r\) => r\.name !== 'Claude' && r\.result !== 'skipped'\)",
+            wf,
+        ), (
+            "the consistency check must excuse ONLY result === 'skipped' — "
+            "excusing on any other result (e.g. 'success') would let a lane "
+            "that ran-and-died pass as 'cleanly skipped'"
+        )
+        assert "mode/lane mismatch, fail-closed (ADR-004)" in wf
+
+    def test_rules_0_and_1_iterate_the_active_lane_set(self):
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert "const active = effectiveMode === 'claude-only' ? [claudeLane] : reviewers;" in wf
+        assert "if (active.some((r) => r.empty))" in wf, "rule 0 must scan the ACTIVE set"
+        assert "for (const r of active)" in wf, "rule 1 must iterate the ACTIVE set"
+
+    def test_claude_only_branch_envelope_constants_and_thresholds(self):
+        """The tightened envelope must not widen silently: APPROVE-only (a
+        COMMENT that passes full quorum blocks solo), NONE/LOW-only (a MEDIUM
+        that passes full quorum blocks solo), 25-file/800-line caps."""
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert "const MAX_FILES = 25, MAX_LINES = 800;" in wf, (
+            "cap constants changed or moved — raising either widens the "
+            "single-lane surface; that is an ADR-004 re-acceptance decision, "
+            "not an edit"
+        )
+        assert "if (claudeLane.verdict !== 'APPROVE')" in wf, (
+            "single-lane pass must require verdict === APPROVE strictly"
+        )
+        assert "if (cConcern !== 'NONE' && cConcern !== 'LOW')" in wf, (
+            "single-lane concern allowlist must be exactly {NONE, LOW}"
+        )
+        assert "? claudeLane.concern : 'HIGH'" in wf, (
+            "unknown concern tokens must normalize to HIGH (fail-closed) in "
+            "the claude-only branch, mirroring the full-quorum normalization"
+        )
+
+    def test_quorum_independent_gates_stay_ordered_before_the_decision_branch(self):
+        """Carve-out, reviewed-surface subset, and self-tune D-lock are
+        quorum-INDEPENDENT: they must all sit between the consistency check
+        and the claude-only decision branch, which in turn must sit before
+        the full-quorum rules 2-7. Reordering any of them behind the decision
+        branch would let claude-only mode approve past a guard that full
+        quorum enforces."""
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        idx = {
+            "mode": wf.index("const rawQuorum = process.env.QUORUM_MODE_RAW"),
+            "consistency": wf.index("const ranAnyway = reviewers.filter"),
+            "rule0": wf.index("if (active.some((r) => r.empty))"),
+            "trunc": wf.index("const truncatedLane = active.find"),
+            "carveout": wf.index("const trustSpineHit = changed.find"),
+            "subset": wf.index("if (unreviewed) {"),
+            "selftune": wf.index("if (selfTune) {"),
+            "branch": wf.index("const MAX_FILES = 25, MAX_LINES = 800;"),
+            "rules27": wf.index("verdict / Max Concern gate (§54.5 rules 2-7)"),
+        }
+        order = ["mode", "consistency", "rule0", "trunc", "carveout", "subset",
+                 "selftune", "branch", "rules27"]
+        positions = [idx[k] for k in order]
+        assert positions == sorted(positions), (
+            f"aggregator gate ordering broken: expected {order}, got indices "
+            f"{idx} — quorum-independent guards must run BEFORE the mode "
+            f"decision branch, and the branch BEFORE rules 2-7"
+        )
+
+    def test_truncated_diff_blocks_binding_approval_in_every_mode(self):
+        """G4 wire-through (v1.6.0 audit HIGH): each lane's in-job enforce
+        step fails on truncated-diff-APPROVE, but the lanes are
+        continue-on-error — the verdict output is extracted BEFORE
+        enforcement, so the aggregator would happily approve on a diff the
+        model never fully saw. The 25/800 caps don't cover it: one minified
+        file passes both caps at >200 KB. The gate must consume the flag."""
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        doc = self._doc()
+        for job in ("gpt-review", "codex-review", "claude-review"):
+            outputs = doc["jobs"][job].get("outputs", {})
+            assert "steps.diff.outputs.diff_truncated" in outputs.get("diff_truncated", ""), (
+                f"{job} must export diff_truncated as a job output — the "
+                f"in-job G4 enforce failure never reaches needs.*"
+            )
+        for env_var, job in (
+            ("GPT_TRUNC", "gpt-review"),
+            ("CODEX_TRUNC", "codex-review"),
+            ("CLAUDE_TRUNC", "claude-review"),
+        ):
+            assert re.search(
+                rf"{env_var}: \$\{{\{{ needs\.{job}\.outputs\.diff_truncated \}}\}}", wf
+            ), f"gate env must wire {env_var} from needs.{job}.outputs.diff_truncated"
+        assert "const truncatedLane = active.find((r) => r.truncated);" in wf, (
+            "the aggregator must block when any ACTIVE lane saw a truncated "
+            "diff — quorum-independent (single-lane mode makes this the ONLY "
+            "model that saw the diff)"
+        )
+        assert "saw a TRUNCATED diff" in wf
+
+    def test_review_by_escalation_warns_and_never_blocks(self):
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert "const REVIEW_BY = '2026-09-28';" in wf, (
+            "ADR-004 review-by date literal moved/changed — keep in sync with "
+            "the ADR (warn-not-block escalation)"
+        )
+        # The overdue check must sit at the TOP of the claude-only branch —
+        # BEFORE the cap/verdict/concern block-returns — so blocked runs past
+        # the date carry the overdue signal too, not just approvals (audit
+        # finding: the first cut warned only on the approve path).
+        assert wf.index("const REVIEW_BY") < wf.index(
+            "const MAX_FILES = 25, MAX_LINES = 800;"
+        ), "overdue check must precede the branch's block-returns"
+        m = re.search(
+            r"if \(new Date\(\) > new Date\(`\$\{REVIEW_BY\}T23:59:59Z`\)\) \{"
+            r"([\s\S]*?)\n              \}",
+            wf,
+        )
+        assert m, "the overdue check body must be present and delimited"
+        assert "decide(" not in m.group(1), (
+            "the overdue body may only warn + set the output — a decide() on "
+            "the date would silently recreate the break-glass treadmill "
+            "ADR-004 exists to relieve"
+        )
+        assert "core.warning" in m.group(1) and "quorum_overdue" in m.group(1)
+
+    # ---- auditability ----------------------------------------------------
+
+    def test_banner_and_restore_command_in_both_comment_bodies(self):
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert wf.count("[REDUCED QUORUM: claude-only]") >= 2, (
+            "both the approval body and the audit body must carry the loud "
+            "reduced-quorum banner — a reader of EITHER comment must see the "
+            "mode without cross-referencing"
+        )
+        assert wf.count("gh variable set AEGIS_REVIEW_QUORUM --body full") >= 2, (
+            "both bodies must carry the restore command"
+        )
+        assert "decision:ADR-004-2026-07-30" in wf, (
+            "the machine marker must name the ADR (greppable audit trail)"
+        )
+        assert wf.count("skipped (quorum=claude-only)") >= 2, (
+            "reduced-mode comment tables must label the OpenAI rows as "
+            "skipped-by-quorum, not absent — an absent-looking lane invites "
+            "the #35 misdiagnosis"
+        )
+
+    def test_audit_footnote_is_mode_conditional(self):
+        """The full-quorum footnote asserts '3-AI finding-class-agreement'.
+        Printing that under claude-only would be a FALSE audit record."""
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert "NOT 3-AI consensus while reduced" in wf, (
+            "the audit footnote must state single-lane gating in reduced mode"
+        )
+        assert re.search(r"const footnote = reduced\s*\n?\s*\?", wf), (
+            "the footnote must be computed mode-conditionally"
+        )
+
+    def test_reviewer_and_aggregator_job_names_are_stable(self):
+        """Check-context strings are rename-fragile (the PR #5 lesson): a
+        cosmetic rename orphans ruleset contexts and consumer dashboards."""
+        doc = self._doc()
+        expected = {
+            "gpt-review": "AI Second Review / gpt-5.4-pro",
+            "codex-review": "AI Second Review / Codex CLI",
+            "claude-review": "AI Second Review / Claude Opus 4.6",
+            "aggregator-approve": "AI Second Review / Aggregator (auto-approve gate)",
+        }
+        for job, name in expected.items():
+            assert doc["jobs"][job].get("name") == name, (
+                f"{job} display name changed from {name!r} — rename-fragile "
+                f"surface; revert or migrate every consumer of the string"
+            )
+
+    def test_adr_004_exists_and_states_the_loss(self):
+        adr = (
+            REPO_ROOT / "docs" / "architecture" / "adr"
+            / "ADR-004-reduced-quorum-claude-only-2026-07-30.md"
+        )
+        assert adr.exists(), "ADR-004 must ship with the mode it authorizes"
+        text = adr.read_text()
+        assert "decorrelation" in text, (
+            "the ADR must state plainly what is lost (three-model error "
+            "decorrelation collapses to one model)"
+        )
+        assert "2026-09-28" in text, "ADR review-by date must match the workflow literal"
+        assert "gh variable set AEGIS_REVIEW_QUORUM --body full" in text
+
+
+class TestVendoredSdkProvenAgainst:
+    """The vendored `_verify_local_vendored.py` must carry a machine-readable
+    Proven-against line equal to the exact SDK pin in requirements-verify.txt.
+    A deliberate SDK bump that skips the re-verification ritual (re-diff the
+    vendored copy against the released source, update the header) fails here —
+    the failing test IS the ritual's enforcement (§26.17 FU-3)."""
+
+    def test_proven_against_matches_verify_pin(self):
+        vendored = (REPO_ROOT / "scripts" / "_verify_local_vendored.py").read_text()
+        m = re.search(
+            r"^# Proven-against: aegis-governance==(\d+\.\d+\.\d+) \(\d{4}-\d{2}-\d{2}\)$",
+            vendored,
+            re.MULTILINE,
+        )
+        assert m, (
+            "scripts/_verify_local_vendored.py must carry a "
+            "'# Proven-against: aegis-governance==X.Y.Z (YYYY-MM-DD)' header line"
+        )
+        proven = m.group(1)
+        reqs = (REPO_ROOT / "requirements-verify.txt").read_text()
+        pin = re.search(
+            r"^aegis-governance\[verify\]==(\d+\.\d+\.\d+)$", reqs, re.MULTILINE
+        )
+        assert pin, "requirements-verify.txt must exact-pin aegis-governance[verify]"
+        assert proven == pin.group(1), (
+            f"vendored copy proven against {proven} but requirements-verify.txt "
+            f"pins {pin.group(1)} — re-diff the vendored source against the "
+            f"released SDK and update the Proven-against line (the ritual is "
+            f"the point, not the string)"
+        )
+
+    def test_source_sha_anchor_survives(self):
+        vendored = (REPO_ROOT / "scripts" / "_verify_local_vendored.py").read_text()
+        assert re.search(r"^# Source SHA:\s+[0-9a-f]{7,40}\b", vendored, re.MULTILINE), (
+            "the Source SHA anchor must survive alongside Proven-against — "
+            "they answer different questions (what commit was copied vs what "
+            "release it was re-proven against)"
+        )
