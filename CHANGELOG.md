@@ -6,6 +6,12 @@ This is the **repo-level** changelog. The `policy_version` field of `policy/veri
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **e3 replay-pair seed job: dotfile vs `upload-artifact` hidden-file default.** The v1.5.0 proof dispatch got e3's happy/tampered/expired assert jobs green for the first time ever, leaving exactly one red job: the replay-store seed wrote `.aegis-replay-e3-test.log` and its upload reported "No files were found" — `actions/upload-artifact` v4.4+ excludes hidden files by default, and the replay store is a dotfile. `include-hidden-files: true` (a test log; no secret content). Also stated plainly for future readers: **a fully-passing e3 run still concludes `failure` at the RUN level by design** — the tampered/expired verify jobs exit 1 on `valid=false` (reusable-workflow jobs cannot `continue-on-error` at step level, the F4 lesson), so e3's success criterion is ALL ASSERT JOBS GREEN, never the run conclusion.
+
 ## [1.5.0] — 2026-07-30
 
 **Consumer default catches up to the patched SDK.** **MINOR** per the bump table: a changed default that does NOT flip a verdict (verdict identity fixture-proven before the bump — 19/19 against the 1.4.0 wheel pre-release and the PyPI artifact post-release, wire format byte-identical since 1.0.0).

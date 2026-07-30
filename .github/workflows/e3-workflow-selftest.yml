@@ -226,6 +226,11 @@ jobs:
         with:
           name: replay-store-seed
           path: .aegis-replay-e3-test.log
+          # The replay store is a DOTFILE, and upload-artifact v4.4+ excludes
+          # hidden files by default — the seed step wrote the file and the
+          # upload still reported "No files were found" (v1.5.0 proof
+          # dispatch). Test log, no secret content: opt back in explicitly.
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
