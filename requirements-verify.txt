@@ -12,11 +12,14 @@
 # dependency tree (liboqs-python et al.) has no business in the fast matrix
 # legs.
 #
-# The SDK pin is EXACT (==1.0.0, not >=): it is the version
-# actions/verify-aegis-attestation/action.yml defaults to, and the committed
-# fixtures are proven against it. There is no evidence about wire-format
-# stability across 1.0.0 → current; bump deliberately, with the fixtures
-# re-verified, never via range drift.
+# The SDK pin is EXACT (==, not >=): the committed fixtures must be proven
+# against the pinned version — bump deliberately, with the fixtures
+# re-verified, never via range drift. The 1.0.0→1.4.0 bump (2026-07-30) was
+# exactly that: DSSE wire format documented byte-identical since 1.0.0,
+# `_verify_local` drift since the vendored ref proven formatting-only, and
+# the 19 fixture tests re-run green against the 1.4.0 wheel BEFORE the bump.
+# NB: action.yml's consumer-facing default stays at its own version — that is
+# a separate, deliberate contract decision, not implied by this CI pin.
 #
 # Regenerate the lockfile whenever this file changes (a drift guard in
 # tests/test_workflow_invariants.py fails until you do):
@@ -25,21 +28,19 @@
 #     --output-file=requirements-verify-ci.txt requirements-verify.txt
 
 # The verifier kit itself — public PyPI since 2026-05-15 (roadmap task #59).
-aegis-governance[verify]==1.0.0
+# 1.4.0 carries the [verify] cryptography range >=48.0.1,<49 (GHSA-537c-gmf6-5ccf
+# fix — Dependabot alert #1); released 2026-07-30 specifically to unblock this pin.
+aegis-governance[verify]==1.4.0
 
 # Test runner + YAML for the test module itself (same bounds as
 # requirements-dev.txt).
 pytest>=8.0,<10
 PyYAML>=6.0
 
-# KNOWN OPEN VULN, blocked upstream — Dependabot alert #1 (HIGH: vulnerable
-# bundled OpenSSL in cryptography wheels < 48.0.1). The obvious fix — a
-# `cryptography>=48.0.1` floor here — is UNSATISFIABLE: every released
-# aegis-governance[verify] (1.0.0 through 1.3.1, checked against PyPI
-# metadata 2026-07-29) pins `cryptography<47.0.0,>=46.0.7`. The unblock is
-# an aegis-governance release that widens the cap; then add the floor here
-# and regenerate. Deliberately left OPEN (not dismissed): the alert is the
-# honest signal. Exposure assessment in docs/roadmap.md — this venv verifies
-# committed fixtures offline on an ephemeral no-secret runner; the vulnerable
-# surface (bundled OpenSSL) is TLS/network-facing code the tests never
-# exercise.
+# Floor forced by Dependabot alert #1 (HIGH, GHSA-537c-gmf6-5ccf: vulnerable
+# bundled OpenSSL in cryptography wheels < 48.0.1). Unsatisfiable until
+# aegis-governance 1.4.0 (released 2026-07-30) widened the [verify] cap from
+# <47 to >=48.0.1,<49; the SDK's own range now implies this, but the floor
+# stays HERE too so a future SDK range loosening can never silently resolve
+# back into the vulnerable window.
+cryptography>=48.0.1

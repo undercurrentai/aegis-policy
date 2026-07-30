@@ -119,7 +119,10 @@ runs:
           echo "Installing aegis-governance[verify] from PyPI: ${AEGIS_SDK_VERSION}"
           pip install "aegis-governance[verify]==${AEGIS_SDK_VERSION}"
         fi
-        pip install pyyaml
+        # Bounded, not floating: a breaking PyYAML major would hit every
+        # portfolio consumer of this action simultaneously with no lockfile
+        # to bisect against (v1.4.1 audit).
+        pip install "PyYAML>=6.0,<7"
         # Smoke-import: catches packaging / SDK-availability drift early with a
         # clear error message rather than a confusing ModuleNotFoundError in
         # verify_action.py's main body.

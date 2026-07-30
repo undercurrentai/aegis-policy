@@ -1,8 +1,13 @@
 name: Error-class Parity
 
-# Cross-checks `policy/verifier-policy-v1.yaml fail_closed_on` against the latest
-# `aegis-governance[verify]` SDK's emitted error_class set. Fails the PR if either
-# side has a member the other lacks.
+# Cross-checks `policy/verifier-policy-v1.yaml fail_closed_on` against the
+# error_class set of the VENDORED SDK snapshot (scripts/_verify_local_vendored.py,
+# pinned at the Source SHA in its header) — NOT the installed SDK. Fails the PR
+# if either side has a member the other lacks. The verifier-kit job runs the
+# exact-pinned PyPI SDK, so vendored-ref drift is a real window: it is
+# re-checked manually on every deliberate SDK pin bump (1.0.0→1.4.0 proven
+# formatting-only, 2026-07-30) until the roadmapped check_vendored_source_sha
+# guard (§26.17 FU-3) machine-checks it.
 #
 # Closes the manual-audit gap from cosmic-flute §26.11 step 4. Without this
 # automation, drift between SDK error_class taxonomy and policy fail_closed_on

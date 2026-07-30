@@ -92,13 +92,16 @@ def _fixture_mode_enabled() -> bool:
     committed under `keys/` + `policy/`. They are NOT advertised in
     action.yml inputs.
 
-    A compromised prior step in a consumer workflow can do:
+    THREAT MODEL, stated honestly (v1.4.1 audit correction): this sentinel
+    stops ACCIDENTAL env leakage — a stale $GITHUB_ENV from an earlier
+    fixture-mode step, or a consumer cargo-culting the override vars. It
+    does NOT stop a deliberately compromised prior step: anything that can
         echo "AEGIS_KEYS_DIR_OVERRIDE=./malicious-keys" >> $GITHUB_ENV
-    which would leak into the next-step composite action's env. Without
-    this sentinel gate the action would load attacker-controlled keys +
-    policy whose fingerprints match each other (both attacker-supplied),
-    pass the runtime fingerprint cross-check, and verify attacker-signed
-    envelopes as valid.
+    can append AEGIS_INTERNAL_FIXTURE_MODE=1 in the same breath (and a
+    prior step in the same job owns the runner anyway). Without the gate,
+    accidental leakage alone would load non-production keys + policy whose
+    fingerprints match each other, pass the runtime cross-check, and verify
+    non-production envelopes as valid — that is the class this closes.
 
     Production consumers MUST NEVER set AEGIS_INTERNAL_FIXTURE_MODE. The
     self-test workflow + unit test helpers set it explicitly. This sentinel
@@ -140,7 +143,16 @@ def _emit_outputs(outputs: dict[str, str]) -> None:
     consumers re-fetch from the original envelope if they need it.
     """
     github_output = os.environ.get("GITHUB_OUTPUT", "").strip()
-    lines = [f"{k}={v}" for k, v in outputs.items()]
+    # ENFORCE the single-line invariant the docstring asserts: a validly
+    # signed envelope with a newline inside a governance field (decision_id,
+    # environment, policy_version, ...) could otherwise inject a second
+    # KEY=VALUE line — and on the failure paths that echo envelope fields,
+    # `valid=true` after `valid=false` wins (v1.4.1 audit, defense-in-depth;
+    # requires AEGIS-signed content, so scrub rather than reject).
+    lines = [
+        f"{k}={str(v).replace(chr(10), ' ').replace(chr(13), ' ')}"
+        for k, v in outputs.items()
+    ]
     body = "\n".join(lines) + "\n"
     if github_output:
         with open(github_output, "a", encoding="utf-8") as fp:

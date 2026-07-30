@@ -19,7 +19,7 @@ name: Tests
 # stubs keep their meaning.
 #
 # `verifier-kit` (single leg, ADVISORY): runs exactly those 19 tests
-# (tests/test_verify_action.py) against `aegis-governance[verify]==1.0.0`
+# (tests/test_verify_action.py) against the exact-pinned `aegis-governance[verify]`
 # from public PyPI, installed from requirements-verify-ci.txt. They hold the
 # repo's highest-severity assertions — including the guard proving
 # `AEGIS_KEYS_DIR_OVERRIDE`/`AEGIS_POLICY_PATH_OVERRIDE` are ignored unless
@@ -218,9 +218,9 @@ jobs:
           key: liboqs-${{ runner.os }}-${{ hashFiles('requirements-verify-ci.txt') }}
 
       - name: Install verifier kit (hash-pinned)
-        # requirements-verify-ci.txt pins aegis-governance[verify]==1.0.0 —
-        # public PyPI, the exact version action.yml defaults to and the
-        # committed fixtures are proven against. See the lockfile header.
+        # requirements-verify-ci.txt exact-pins aegis-governance[verify] —
+        # public PyPI, fixtures re-proven against the pinned version on every
+        # deliberate bump (see requirements-verify.txt for the pin + policy).
         run: |
           python -m pip install --no-deps --require-hashes --only-binary=:all: -r requirements-verify-ci.txt
           python -m pip check

@@ -93,7 +93,7 @@ if (!jobRepo || !jobSha) {
     throw new Error('REUSABLE_WORKFLOW_FILENAME env var not set; cannot build SELF_REGEX (caller workflow step must set it in env:)');
   }
   const SELF_REGEX = new RegExp(
-    `^([^/]+)/([^/]+)/\\.github/workflows/${REUSABLE_WORKFLOW_FILENAME.replace(/\./g, '\\.')}(?:@.*)?$`,
+    `^([^/]+)/([^/]+)/\\.github/workflows/${REUSABLE_WORKFLOW_FILENAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:@.*)?$`,
   );
   // Collect ALL matches (not just first) to detect multi-match
   // ambiguity per /quality-gate Phase 3 /ultrathink U6 (MEDIUM/C2):
@@ -154,6 +154,11 @@ if (!jobRepo || !jobSha) {
     );
   }
   resolvedRef = matchingEntry.sha || matchingEntry.ref;
+  if (!resolvedRef) {
+    // Neither sha nor ref: refuse — empty output means the downstream
+    // checkout silently lands on the default branch (v1.4.1 audit).
+    throw new Error('referenced_workflows entry has neither .sha nor .ref; refusing unpinned checkout');
+  }
   resolutionPath = 'referenced_workflows-API';
 }
 

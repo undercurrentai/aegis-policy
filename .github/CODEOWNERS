@@ -84,3 +84,7 @@ actions/                           @undercurrentai/security-reviewers
 # WITHOUT this protection: a PR touching only pytest.ini fell under `*`, where
 # the machine-user IS a code owner, and was auto-approvable — closed here.)
 /pytest.ini                        @undercurrentai/security-reviewers
+# Root conftest.py: pytest auto-executes it at collection in every CI venv —
+# arbitrary code in the required test jobs. Absent today; pre-armed so its
+# creation is human-only (matches the trust-spine glob added with it).
+/conftest.py                       @undercurrentai/security-reviewers

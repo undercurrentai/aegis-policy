@@ -93,6 +93,12 @@ trust_spine_globs:
   # Mirrored in .github/CODEOWNERS. (Introduced in #36 without this protection;
   # closed here.)
   - "pytest.ini"
+  # Root conftest.py — same class, stronger: pytest AUTO-EXECUTES a root
+  # conftest at collection time in every CI venv (including the required
+  # matrix job), so a new root conftest is arbitrary code in the test jobs.
+  # Does not exist today; the glob pre-arms the carve-out so its creation is
+  # never auto-approvable (v1.4.1 audit, part of the reviewed-surface fix).
+  - "conftest.py"
 
 # NOTE: as of cosmic-flute §54 Q2 + the QG-§54 adversarial audit, the carve-out
 # covers: the 6 trust-spine dirs (keys/, schema/, policy/, .github/, docs/architecture/,

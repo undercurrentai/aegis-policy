@@ -7,12 +7,17 @@
 # Source range: 37f8608..7e422b2 (Sprint 5/E1.5: ML-DSA-65 migration + ADR-012)
 # Vendored on:  2026-05-10 (Sprint 5/E1.5 Phase 5 of cosmic-flute §30)
 #
-# Why vendored: aegis-governance is private (BSL-1.1) + aegis-sdk 1.0.0 not yet
-# on PyPI (per AU-N-1 follow-up). The parity gate (scripts/check_error_class_
-# parity.py) AST-walks this file to extract the SDK error_class taxonomy; the
-# new fingerprint-parity gate (scripts/check_fingerprints.py) verifies the
-# vendored verifier expects the same algorithm + sizes that policy/verifier-
-# policy-v1.yaml declares.
+# Why vendored (2026-05-10-era rationale; the AST-walk half still holds): at
+# vendoring time aegis-governance was private + aegis-sdk unpublished. The SDK
+# has shipped on PyPI as aegis-governance[verify] since 2026-05-15, but the
+# vendored copy remains deliberately: the parity gate (scripts/check_error_
+# class_parity.py) AST-walks this file's SOURCE to extract the SDK error_class
+# taxonomy — it needs source text, not an importable module, and an ~8s gate
+# should not carry the SDK's native-build dependency tree. The fingerprint-
+# parity gate (scripts/check_fingerprints.py) verifies the vendored verifier
+# expects the same algorithm + sizes that policy/verifier-policy-v1.yaml
+# declares. Upstream drift since this SHA is re-checked on deliberate SDK
+# bumps (1.0.0->1.4.0 on 2026-07-30: formatting-only).
 #
 # Refresh procedure: copy the new _verify_local.py verbatim from upstream;
 # update the Source SHA above; bump policy/verifier-policy-v1.yaml policy_version
@@ -20,10 +25,10 @@
 # changed. The error-class-parity.yml CI workflow fails on the refresh PR until
 # the policy artifact catches up — that is the intended drift detection.
 #
-# Do NOT import this file as a runtime module. The runtime verifier ships in
-# aegis-governance/aegis-sdk/... and will be distributed via PyPI as
-# aegis-governance[verify] once 1.0.0 is published. This vendored copy is
-# parse-only reference source for the parity gates.
+# Do NOT import this file as a runtime module. The runtime verifier ships on
+# PyPI as aegis-governance[verify] (since 2026-05-15; CI's verifier-kit job
+# installs the exact-pinned release). This vendored copy is parse-only
+# reference source for the parity gates.
 # =============================================================================
 from __future__ import annotations
 

@@ -57,26 +57,37 @@ team members; no PR). Then consider the 2-of-N hardening the CODEOWNERS header d
 
 **Tracking:** `docs/operations/trust-spine-break-glass.md`; cosmic-flute §34.17.2
 
-### Dependabot alert #1 — cryptography < 48.0.1, blocked on an aegis-governance release
+### Dependabot alert #1 — cryptography < 48.0.1 ~~blocked on an aegis-governance release~~
 
-**Status:** 🔴 OPEN, blocked upstream — surfaced 2026-07-29, minutes after `requirements-verify-ci.txt`
-first landed (#39).
+**Status:** ✅ RESOLVED 2026-07-30 (v1.4.1) — the unblock chain ran end-to-end in one day.
 
-The verifier-kit lockfile pins `cryptography==46.0.7`, inside the HIGH-severity vulnerable range
-(< 48.0.1, vulnerable bundled OpenSSL in the wheels). A `>=48.0.1` floor is **unsatisfiable**:
-every released `aegis-governance[verify]` (1.0.0–1.3.1, PyPI metadata checked 2026-07-29) pins
-`cryptography<47.0.0,>=46.0.7`. The alert is deliberately left open, not dismissed — it is the
-honest signal that the fix is pending.
+Surfaced 2026-07-29 minutes after `requirements-verify-ci.txt` first landed (#39): the lockfile
+pinned `cryptography==46.0.7`, inside the HIGH GHSA-537c-gmf6-5ccf range (vulnerable bundled
+OpenSSL < 48.0.1), and a patched floor was unsatisfiable — every *released*
+`aegis-governance[verify]` capped `cryptography<47`.
 
-**Exposure, assessed honestly:** the vulnerable surface is the bundled OpenSSL, i.e. TLS/network
-code paths. The verifier-kit job verifies committed fixtures **offline** on an ephemeral,
-no-secret runner; its tests open no TLS connections. Real but small; not a reason to unpin.
+**How it resolved:** the cap had already been widened on aegis-governance main by #271 (G107,
+retiring that same GHSA's waiver server-side) and the SDK sat at an **unreleased 1.4.0 since
+2026-06-12** — the publish workflow had simply never been dispatched. On 2026-07-30 the 1.4.0
+release notes were reconciled (aegis-governance#300: real release date + the #271 dependency
+bullet), `sdk-publish.yml` was dispatched (pypi environment approval per Josh's in-session
+instruction), and PyPI 1.4.0 now carries `cryptography>=48.0.1,<49.0.0` in the verify extra.
+Here, `requirements-verify.txt` bumped to `==1.4.0` + a permanent `cryptography>=48.0.1` floor,
+the lockfile regenerated (`cryptography==48.0.1`), and the 19 fixture tests were re-verified
+against BOTH the locally-built wheel (pre-release) and the published PyPI artifact
+(post-release) — wire format byte-identical since 1.0.0, `_verify_local` drift since the
+vendored ref proven formatting-only.
 
-**Unblock (in aegis-governance, not this repo):** widen the `verify` extra's cap (e.g.
-`cryptography>=46.0.7,<50`), release (1.3.2+), then here: bump `requirements-verify.txt`'s SDK
-pin deliberately, add the `cryptography>=48.0.1` floor, regenerate the lockfile, and re-verify
-the 19 fixture tests against the new SDK before merging (wire-format stability is unproven
-across SDK versions — that re-verification is the point of the exact pin).
+**Deliberately NOT done (open decision):** the consumer-facing `aegis-sdk-version: "1.0.0"`
+default — declared in **two** places, `actions/verify-aegis-attestation/action.yml` AND the
+reusable workflow `.github/workflows/aegis-verify-attestation.yml` (a future bump must touch
+both or strand one) — still resolves cryptography 46.0.7 *for anything running the
+composite action*: the 19 portfolio consumers AND this repo's own `workflow_dispatch`-only
+e2/e3 self-tests, which take that default. Bumping it to 1.4.0 is a consumer-contract change
+(MINOR at minimum) — fixture-proof exists now, but the default bump should be its own
+deliberate release decision, not a rider on a CI-lockfile fix. Until then, dispatching e2/e3
+runs the vulnerable-range cryptography inside an ephemeral offline job (same bounded exposure
+the alert had).
 
 ### Promote `Verifier kit (py3.13)` to a required check
 
@@ -85,7 +96,9 @@ U3): land advisory first, promote after **~2 weeks** of green runs (≈ 2026-08-
 
 The `verifier-kit` job in `.github/workflows/tests.yml` runs the 19 `needs_aegis_sdk` tests
 (`tests/test_verify_action.py`, including the `AEGIS_KEYS_DIR_OVERRIDE` redirection guard) on
-every PR against `aegis-governance[verify]==1.0.0` from public PyPI. It is deliberately NOT in
+every PR against the exact-pinned `aegis-governance[verify]` from public PyPI (1.4.0 as of
+v1.4.1 — note the promotion-window run history spans the 1.0.0→1.4.0 SDK bump mid-window,
+fixture-proven on both sides). It is deliberately NOT in
 org ruleset `16294975` yet: the `Test suite (py3.12/py3.13)` contexts were themselves promoted on
 a two-run history the same day, and stacking a second unproven required check — one with a native
 liboqs build and a cache dependency in its critical path — compounds that risk.

@@ -88,7 +88,12 @@ _SECRET_PATTERNS = (
     # message text: "Incorrect API key provided: sk-pr***…***dEfA" leaked in full.
     re.compile(r"sk-[A-Za-z0-9_-]*[*.…]{3,}[A-Za-z0-9_-]*"),
     re.compile(r"sk-[A-Za-z0-9_-]{16,}"),
-    re.compile(r"Bearer\s+[A-Za-z0-9_.\-]{16,}", re.IGNORECASE),
+    # Include the standard-base64 alphabet (+ / =): opaque OAuth2/service
+    # tokens are commonly standard base64, and a class missing those chars
+    # stopped matching at the first `+`, publishing the token TAIL — the
+    # exact exposure class these patterns exist to close (v1.4.1 audit,
+    # empirically demonstrated with `Bearer abc...+SECRET/xyz==`).
+    re.compile(r"Bearer\s+[A-Za-z0-9_.+/=\-]{16,}", re.IGNORECASE),
     # Other credential shapes reachable from an OpenAI error, an AEGIS 401, or
     # a diff line the model quotes back (SYSTEM_PROMPT tells it to cite
     # file:line evidence, and names "secret leak" as a CRITICAL finding class —

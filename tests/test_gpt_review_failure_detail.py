@@ -115,14 +115,20 @@ class TestSanitizerPrimitive:
         assert "<redacted-secret>" in gr._safe_text(_FAKE_BEARER)
 
     def test_redacts_masked_openai_key_stars(self) -> None:
-        """The documented threat: OpenAI's partially-masked echo in auth errors."""
+        """The documented threat: OpenAI's partially-masked echo in auth errors.
+
+        Asserts the key TAIL is gone too — a sanitizer matching only the
+        `sk-…` prefix leaves the revealing suffix residue and still passes an
+        absence-of-whole-string check (v1.4.1 audit)."""
         out = gr._safe_text(f"Incorrect API key provided: {_MASKED_KEY_STARS}. You can find...")
         assert _MASKED_KEY_STARS not in out
         assert "<redacted-secret>" in out
+        assert _MASKED_KEY_STARS[-4:] not in out, "masked-key tail residue survived"
 
     def test_redacts_masked_openai_key_dots(self) -> None:
         out = gr._safe_text(f"Incorrect API key provided: {_MASKED_KEY_DOTS}")
         assert _MASKED_KEY_DOTS not in out
+        assert _MASKED_KEY_DOTS[-4:] not in out, "masked-key tail residue survived"
 
     # Bodies are deliberately the literal word EXAMPLE repeated: these must be
     # long enough to clear each pattern's length floor, but must never look like
@@ -226,12 +232,36 @@ class TestSuccessPathIsSanitized:
     """
 
     def test_every_markdown_write_routes_through_safe_text(self) -> None:
+        """AST-walked, not line-regexed: two of the three real call sites are
+        already multi-line, so a single-line regex captured only the bare
+        `write_text(` prefix and its `"markdown" in w` filter matched nothing
+        — a reformat (or variable rename) made the guard vacuously green
+        while the sanitizer could be deleted (v1.4.1 audit,
+        mutation-verified). Walk the AST: EVERY args.output.write_text call's
+        argument expression must route through _safe_text (or the fallback
+        writer, which sanitizes internally)."""
+        import ast
+
         src = _MODULE_PATH.read_text(encoding="utf-8")
-        writes = re.findall(r"args\.output\.write_text\([^\n]*", src)
-        assert writes, "no write_text site found — did the emit path move?"
-        unsanitized = [w for w in writes if "markdown" in w and "_safe_text(" not in w]
+        tree = ast.parse(src)
+        write_calls = []
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "write_text"
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "output"
+            ):
+                write_calls.append(node)
+        assert write_calls, "no args.output.write_text site found — did the emit path move?"
+        unsanitized = []
+        for call in write_calls:
+            arg_src = ast.get_source_segment(src, call.args[0]) if call.args else ""
+            if "_safe_text(" not in (arg_src or "") and "_fallback" not in (arg_src or ""):
+                unsanitized.append(ast.get_source_segment(src, call) or "<unparsed>")
         assert not unsanitized, (
-            f"success-path write publishes unsanitized model output: {unsanitized}. "
+            f"write site(s) publish unsanitized model output: {unsanitized}. "
             "gpt_review.md is posted verbatim as a PR comment on a PUBLIC repo."
         )
 

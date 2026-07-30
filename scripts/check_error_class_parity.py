@@ -79,6 +79,15 @@ def load_expected_from_policy() -> set[str]:
     except yaml.YAMLError as e:
         print(f"ERROR: failed to parse {POLICY_PATH}: {e}", file=sys.stderr)
         sys.exit(2)
+    if not isinstance(data, dict):
+        # Empty/comment-only YAML loads as None -> AttributeError under the
+        # wrong exit code; keep the 2 = execution-error taxonomy (v1.4.1).
+        print(
+            f"ERROR: {POLICY_PATH} is not a mapping "
+            f"(got {type(data).__name__}) — empty or malformed file",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     fail_closed_on = data.get("fail_closed_on")
     if not isinstance(fail_closed_on, list):
         print(

@@ -39,6 +39,12 @@ name: AEGIS Enforce (caller)
 on:
   pull_request:
     branches: [main, master]
+  # TRIPWIRE (v1.4.1 audit): this is the ONLY required-check workflow with a
+  # merge_group trigger. Do NOT enable a merge queue on this repo until ALL
+  # seven ruleset-required contexts (tests.yml ×2, lint.yml ×2, both parity
+  # workflows, aegis-shadow-eval.yml) gain merge_group: in the SAME PR —
+  # otherwise every queued PR wedges at "Expected" on the six that never
+  # report (the §48.15 R2 structural-unmergeability class).
   merge_group:
 
 concurrency:
