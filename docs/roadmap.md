@@ -78,16 +78,30 @@ against BOTH the locally-built wheel (pre-release) and the published PyPI artifa
 (post-release) — wire format byte-identical since 1.0.0, `_verify_local` drift since the
 vendored ref proven formatting-only.
 
-**Deliberately NOT done (open decision):** the consumer-facing `aegis-sdk-version: "1.0.0"`
-default — declared in **two** places, `actions/verify-aegis-attestation/action.yml` AND the
-reusable workflow `.github/workflows/aegis-verify-attestation.yml` (a future bump must touch
-both or strand one) — still resolves cryptography 46.0.7 *for anything running the
-composite action*: the 19 portfolio consumers AND this repo's own `workflow_dispatch`-only
-e2/e3 self-tests, which take that default. Bumping it to 1.4.0 is a consumer-contract change
-(MINOR at minimum) — fixture-proof exists now, but the default bump should be its own
-deliberate release decision, not a rider on a CI-lockfile fix. Until then, dispatching e2/e3
-runs the vulnerable-range cryptography inside an ephemeral offline job (same bounded exposure
-the alert had).
+**~~Deliberately NOT done~~ DONE (v1.5.0, 2026-07-30):** the consumer-facing
+`aegis-sdk-version` default is now **1.4.0** in both declaration sites
+(`actions/verify-aegis-attestation/action.yml` + the reusable
+`.github/workflows/aegis-verify-attestation.yml`), enforced equal by
+`TestSdkDefaultParity` so a future bump can never strand one site. Verdict identity was
+fixture-proven before the bump (19/19 twice on 2026-07-30). Wording correction from the
+v1.5.0 scoping: the 19 portfolio consumers run the **enforce** surface (`aegis-enforce.yml`),
+not the verify surface — the verify-surface consumers are aegis-governance's deploy `verify`
+job (SHA-pinned AND passing `aegis-sdk-version: "1.0.0"` explicitly, so the default doesn't
+reach it) and this repo's own e2/e3 dispatches (which take the default and now install
+cryptography 48.0.1).
+
+**Remaining follow-ups from this decision:**
+- **aegis-governance `aegis-deploy.yml` verify job** (the one real verify consumer): advance
+  its reusable-workflow SHA pin to the v1.5.0 commit AND drop the explicit
+  `aegis-sdk-version: "1.0.0"` input — that is where GHSA-537c-gmf6-5ccf actually gets
+  remediated for a consumer. **Parked until GCP billing is restored** (the deploy path is
+  untestable while Cloud Run is down; shipping unverifiable deploy-config changes is the
+  wrong trade).
+- **Consumer docs `@path` caveat:** the reusable verify workflow's job runs in a FRESH
+  workspace (self-checkout into `aegis-policy/` subdir only), so a consumer-side
+  `envelope: "@path/in/consumer/repo.json"` can never resolve — e3's first-ever run proved
+  the failure mode. Docs should steer consumers to inline-JSON envelopes (or the workflow
+  could grow an artifact-download input). REUSABLE-WORKFLOW.md examples still show `@`-paths.
 
 ### Promote `Verifier kit (py3.13)` to a required check
 

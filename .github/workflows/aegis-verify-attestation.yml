@@ -78,7 +78,7 @@ on:
         description: "PyPI version pin for aegis-governance[verify] SDK. Used when aegis-sdk-git-ref is empty — the DEFAULT install path: aegis-governance[verify] has been on public PyPI since 2026-05-15 (task #59), no secret or Git access needed."
         required: false
         type: string
-        default: "1.0.0"
+        default: "1.4.0"
       aegis-sdk-git-ref:
         description: "Optional Git ref (commit SHA / tag / branch) for aegis-sdk install via Git. When set, overrides aegis-sdk-version; requires the AEGIS_SDK_FETCH_TOKEN secret only if fetching that ref needs auth. The default PyPI path needs no secret — aegis-governance[verify] is public PyPI since 2026-05-15 (task #59)."
         required: false
@@ -103,12 +103,12 @@ on:
         type: string
         default: ""
       internal-keys-dir-override:
-        description: "TEST-ONLY. Workspace-relative override for keys/ directory; only honored when internal-fixture-mode='1'. NEVER set in production."
+        description: "TEST-ONLY. Override for keys/ directory, resolved relative to the checked-out aegis-policy REPO ROOT (or absolute) — NOT the workspace; the two diverge in this workflow's subdir-checkout context (v1.5.0 correction — the old 'workspace-relative' wording induced a broken fix). Only honored when internal-fixture-mode='1'. NEVER set in production."
         required: false
         type: string
         default: ""
       internal-policy-path-override:
-        description: "TEST-ONLY. Workspace-relative override for policy/verifier-policy-v1.yaml path; only honored when internal-fixture-mode='1'. NEVER set in production."
+        description: "TEST-ONLY. Override for policy/verifier-policy-v1.yaml, resolved relative to the checked-out aegis-policy REPO ROOT (or absolute) — NOT the workspace (v1.5.0 correction, same as internal-keys-dir-override). Only honored when internal-fixture-mode='1'. NEVER set in production."
         required: false
         type: string
         default: ""

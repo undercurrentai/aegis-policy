@@ -8,7 +8,7 @@ name: E2 Action Self-Test
 # former `unit-tests` job was superseded 2026-07-29: tests/test_verify_action.py
 # now runs on every PR in tests.yml's `verifier-kit` job.)
 #
-# SDK install: action.yml's default — aegis-governance[verify]==1.0.0 from
+# SDK install: action.yml's default — aegis-governance[verify]==1.4.0 from
 # PUBLIC PyPI (task #59 shipped 2026-05-15). The former `aegis-sdk-git-ref:
 # dc9c9df` pins + AEGIS_SDK_FETCH_TOKEN machinery dated from when the SDK was
 # private. That secret was never configured in this repo and this workflow had

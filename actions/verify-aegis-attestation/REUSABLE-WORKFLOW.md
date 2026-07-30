@@ -23,7 +23,7 @@ jobs:
       expected-digest: ${{ needs.build.outputs.sha256 }}
       expected-environment: production
       replay-store-path: .github/.aegis-replay.log
-      # (default PyPI install — aegis-governance[verify]==1.0.0, no secret.
+      # (default PyPI install — aegis-governance[verify]==1.4.0, no secret.
       # Add aegis-sdk-git-ref + the AEGIS_SDK_FETCH_TOKEN secret only to pin
       # an unreleased SDK commit from the private source repo.)
 
@@ -72,7 +72,7 @@ The reusable workflow's input set is the composite Action's 8 inputs + `runs-on`
 | `policy-version-expected` | no | `""` | Strict-equal check. Empty = read from this repo's `policy/verifier-policy-v1.yaml` (currently `2.1.0`). |
 | `replay-store-path` | no | `""` | Workspace-relative path to append-only replay-detection file. Empty = no replay check; action emits `::warning::`. |
 | `python-version` | no | `3.13` | Python version for `setup-python`. |
-| `aegis-sdk-version` | no | `1.0.0` | PyPI version pin for `aegis-governance[verify]`. Used when `aegis-sdk-git-ref` is empty. |
+| `aegis-sdk-version` | no | `1.4.0` | PyPI version pin for `aegis-governance[verify]`. Used when `aegis-sdk-git-ref` is empty. |
 | `aegis-sdk-git-ref` | no | `""` | Optional Git ref for `aegis-sdk` install — overrides the PyPI default (the standard path; task #59 shipped 2026-05-15). Needs repo read access: see Secrets. |
 | `runs-on` | no | `blacksmith-4vcpu-ubuntu-2404` | Runner label. Override for GitHub-hosted or self-hosted pools. |
 
@@ -294,7 +294,7 @@ When the consumer pins `aegis-policy@<sha>` on the reusable workflow `uses:` lin
 Behavior is governed by the same three knobs as the composite Action:
 
 1. **`policy/verifier-policy-v1.yaml policy_version`** — currently `2.1.0`.
-2. **`aegis-sdk` version** — `aegis-sdk-version` input (default `1.0.0`) or `aegis-sdk-git-ref`.
+2. **`aegis-sdk` version** — `aegis-sdk-version` input (default `1.4.0`) or `aegis-sdk-git-ref`.
 3. **`keys/*` fingerprints** — Sprint 5/E1.5 ceremony 2026-05-10.
 
 The reusable workflow adds no NEW versioning surface — it's a thin orchestration wrapper around the composite. Bumping the `@<sha>` consumers pin advances all three knobs together.
