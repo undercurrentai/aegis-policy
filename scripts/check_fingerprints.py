@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 import yaml
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -67,6 +68,14 @@ def _load_policy_keyids(policy_path: Path) -> dict[str, str]:
     """Load `required_keyids` block from the policy YAML."""
     with policy_path.open() as fp:
         policy = yaml.safe_load(fp)
+    if not isinstance(policy, dict):
+        # An empty/comment-only YAML loads as None -> AttributeError -> raw
+        # traceback under the WRONG exit code (1 = "parity violated" instead
+        # of 2 = execution error). Fail with the taxonomy intact (v1.4.1).
+        raise ValueError(
+            f"{policy_path.name}: policy YAML is not a mapping "
+            f"(got {type(policy).__name__}) — empty or malformed file"
+        )
     keyids = policy.get("required_keyids")
     if not isinstance(keyids, dict):
         raise ValueError(
@@ -101,7 +110,7 @@ def main() -> int:
     try:
         ed25519_raw = _load_ed25519_raw(ED25519_KEY_FILE)
         mldsa65_raw = MLDSA65_KEY_FILE.read_bytes()
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, UnsupportedAlgorithm) as e:
         print(f"ERROR reading key files: {e}", file=sys.stderr)
         return 2
 

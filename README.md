@@ -7,21 +7,17 @@ Verifier kit + canonical trust roots for AEGIS cryptographic attestations (per [
 | Path | Purpose |
 |---|---|
 | `schema/` | Vendored predicate schema v1 + interface-contract `attestation:` section, sourced verbatim from `aegis-governance@a5c0bfd`. Self-contained — consumers don't need to clone the parent repo. |
-| `policy/` | **Canonical verifier policy artifact** (`verifier-policy-v1.yaml`). Lists required algorithms, required keyids (placeholders until E1.5), required context bindings, fail-closed conditions, TTL per risk class, nonce policy, policy_version compatibility. Consumers pin this file by **immutable SHA**, never by `@main`. |
-| `keys/` | Canonical Ed25519 + ML-DSA-44 public keys for hybrid PQ-ready verification. **Currently placeholder** — real keys land in Sprint 5/E1.5 ceremony. |
-| `docs/` | Trust-model ADR-001, governance summary, key-rotation runbook stub, roadmap. |
-| `scripts/` | Maintenance: error-class parity check (CI gate). |
-| `.github/workflows/` | Lint + AEGIS shadow-eval (advisory) + error-class parity (gating). |
+| `policy/` | **Canonical verifier policy artifact** (`verifier-policy-v1.yaml`). Required algorithms, required keyids, required context bindings, fail-closed conditions, TTL per risk class, nonce policy, policy_version compatibility. Consumers pin this file by **immutable SHA**, never by `@main`. |
+| `keys/` | **Canonical Ed25519 + ML-DSA-65 public keys** (real, shipped Sprint 5/E1.5 ceremony 2026-05-12; SHA-256 fingerprints cross-checked against the policy artifact by the fingerprint-parity CI gate). |
+| `actions/verify-aegis-attestation/` | **Composite GitHub Action** — offline attestation verification, consumed cross-repo by SHA pin (Sprint 5/E2). |
+| `.github/workflows/aegis-verify-attestation.yml` | **Reusable workflow** wrapping the composite (Sprint 5/E3). `aegis-enforce.yml` — the §48 enforce substrate consumed by the portfolio. |
+| `docs/` | Trust-model ADR-001, governance summary, key-rotation runbook (full procedure), release discipline, break-glass runbook, roadmap. |
+| `scripts/` | Maintenance + gates: error-class parity, fingerprint parity, `verify_action.py` (the composite's entry point). |
+| `.github/workflows/` | Test suite (both venv paths, required), lint + CODEOWNERS-validity guard (required), parity gates (required), AEGIS shadow-eval (required), tri-AI second review + auto-approve aggregator, verifier-kit job (advisory). |
 
-## What's NOT here (yet)
+Org-level GitHub Ruleset enforcement is live: `aegis-attestation-required-checks` (7 required contexts, `bypass_actors: []`).
 
-- **Real public keys** — placeholder docs only. Sprint 5/E1.5 (separate gated PR with Josh-explicit-✅ AEGIS-self-tune-class gate per cosmic-flute §5).
-- **Composite GitHub Action `verify-aegis-attestation`** — Sprint 5/E2 (separate plan).
-- **Reusable workflow `aegis-verify-attestation.yml`** — Sprint 5/E3 (separate plan).
-- **Dogfood integration** (aegis-deploy.yml + openclaw-operator-os blue-green-deploy.sh) — Sprint 6/F1+F2.
-- **Org-level GitHub Ruleset enforcement** — Sprint 5/E1.5 admin op.
-
-See [`docs/roadmap.md`](docs/roadmap.md).
+See [`docs/roadmap.md`](docs/roadmap.md) for what remains open.
 
 ## Trust model
 
@@ -36,7 +32,7 @@ See [`docs/architecture/adr/ADR-001-repo-trust-model.md`](docs/architecture/adr/
 
 ## License
 
-**Apache-2.0** — this is a **client-side verifier kit**. Client libraries ship permissive per industry convention (sigstore, slsa-verifier, in-toto, datadog-agent, vault-action all Apache-2.0). The parent `aegis-governance` SaaS server stays **BSL-1.1** (revenue protection); the verifier kit is intrinsically commodity (Ed25519 + ML-DSA-44 + RFC 8785 + DSSE are open standards, derivable in ~250 LOC from the publicly-vendored schema). See cosmic-flute §26.15 C for the full industry-pattern rationale.
+**Apache-2.0** — this is a **client-side verifier kit**. Client libraries ship permissive per industry convention (sigstore, slsa-verifier, in-toto, datadog-agent, vault-action all Apache-2.0). The parent `aegis-governance` SaaS server stays **BSL-1.1** (revenue protection); the verifier kit is intrinsically commodity (Ed25519 + ML-DSA-65 + RFC 8785 + DSSE are open standards, derivable in ~250 LOC from the publicly-vendored schema). See cosmic-flute §26.15 C for the full industry-pattern rationale.
 
 ## Reporting security issues
 
@@ -44,6 +40,6 @@ Email `security@undercurrentholdings.com` or use GitHub's [private vulnerability
 
 ## Status
 
-`v1.3.0` — the `aegis-enforce.yml` public surface gained the `on_unavailable` and `allowed_api_hosts` inputs, so an unreachable AEGIS API is now distinguishable from a governance denial (the conflation deadlocked `aegis-governance` main during the 2026-06/07 outage). The repository test suite is gated on every PR for the first time. See `CHANGELOG.md`.
+Current release: see the top entry of [`CHANGELOG.md`](CHANGELOG.md) (version-agnostic by design — this line went stale twice when it named versions). Highlights as of v1.4.1 (2026-07-30): the required-check set is satisfiable in-band (7 contexts), every CI dependency install is hash-pinned wheel-only from committed lockfiles, the 19 verifier-kit tests run on every PR against the exact-pinned public-PyPI SDK, trust-spine code ownership is team-based with a CODEOWNERS-validity CI guard, and Dependabot alert #1 (GHSA-537c-gmf6-5ccf) is closed end-to-end.
 
 Earlier: Sprint 6/F1 SHIP COMPLETE + §38 forensic-audit chain (aegis-governance v1.2.7 in production since 2026-05-21); cumulative ship cycle E1 → E1.5 → E2 → E3 → sub-phase 3a → QG-§37.18 → sub-phase 4 v1.2.6 → §38 v1.2.7.

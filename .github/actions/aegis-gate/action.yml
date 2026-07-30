@@ -291,6 +291,11 @@ runs:
         # arbitrary step outputs. A 32-hex-char delimiter collision is negligible.
         DELIM_R="AEGIS_EOF_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
         DELIM_J="AEGIS_JSON_EOF_$(python3 -c 'import secrets; print(secrets.token_hex(16))')"
+        # status/confidence are JSON-derived too — scrub line breaks so they
+        # share the injection hardening the heredoc gives rationale/json
+        # (QG48-1 invariant, applied symmetrically per the v1.4.1 audit).
+        STATUS="$(printf '%s' "${STATUS}" | tr -d '\r\n')"
+        CONFIDENCE="$(printf '%s' "${CONFIDENCE}" | tr -d '\r\n')"
         {
           echo "status=${STATUS}"
           echo "confidence=${CONFIDENCE}"

@@ -107,7 +107,16 @@ def extract_raw(pem_bytes: bytes) -> bytes:
             f"refused. PEM may be malformed or attacker-crafted."
         )
 
-    # marker is 4 bytes; +1 for unused-bits-count byte (always 0 for byte-aligned keys)
+    # marker is 4 bytes; +1 for unused-bits-count byte. VERIFY it is 0x00
+    # rather than assuming: a crafted SPKI with a nonzero unused-bits count
+    # would silently extract 1952 bytes that are not the canonical key, and
+    # that byte-string flows into keys/mldsa65-public.bin + the pinned
+    # fingerprint (v1.4.1 audit — refuse-rather-than-guess posture).
+    if der[idx + 4] != 0x00:
+        raise ValueError(
+            f"BIT STRING unused-bits byte is 0x{der[idx + 4]:02x}, expected "
+            f"0x00 for a byte-aligned ML-DSA-65 key; refusing extraction"
+        )
     raw_start = idx + 5
     raw = der[raw_start : raw_start + MLDSA65_RAW_LEN]
     if len(raw) != MLDSA65_RAW_LEN:

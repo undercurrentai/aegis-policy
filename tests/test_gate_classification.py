@@ -194,12 +194,21 @@ class TestAntiTier2:
         return Path(__file__).resolve().parents[1] / ".github" / "actions" / "aegis-gate"
 
     @pytest.mark.parametrize(
-        "forbidden", ["actions/checkout", "pip install", "PYTHONPATH", "python -m cli"]
+        "forbidden",
+        # git/gh clone included: a `run: git clone ...` brings caller source
+        # into the workspace without the literal "actions/checkout" string
+        # (v1.4.1 audit — the count-based checkout guard cannot see it).
+        ["actions/checkout", "pip install", "PYTHONPATH", "python -m cli",
+         "git clone", "gh repo clone"],
     )
     def test_composite_never_installs_or_checks_out_caller_code(
         self, forbidden: str
     ) -> None:
-        for path in self._gate_dir().iterdir():
+        # rglob, not iterdir: the dir is flat today, but a future
+        # aegis-gate/scripts/helper.sh would be invisible to a non-recursive
+        # scan and this guard's negative control would silently stop firing
+        # (v1.4.1 audit).
+        for path in self._gate_dir().rglob("*"):
             if path.is_file():
                 # errors="replace": this walks whatever is in the directory, so
                 # a stray non-UTF-8 file (a macOS .DS_Store) would otherwise
@@ -223,8 +232,14 @@ class TestAntiTier2:
         import re
 
         root = Path(__file__).resolve().parents[1]
+        # Bounded window (not unbounded DOTALL): if allowed_api_hosts ever
+        # lost its own default, an unbounded `.*?` would silently bind the
+        # NEXT input's default in each file and symmetric drift would pass
+        # (v1.4.1 audit). The gate composite's comment block puts default:
+        # ~570 chars after the key; 800 spans it with headroom while still
+        # excluding the next input block (which starts >1k later).
         pattern = re.compile(
-            r"allowed_api_hosts:.*?default:\s*['\"]?([^'\"\n]+)", re.DOTALL
+            r"allowed_api_hosts:[\s\S]{0,800}?default:\s*['\"]?([^'\"\n]+)"
         )
         composite = pattern.search(
             (root / ".github" / "actions" / "aegis-gate" / "action.yml").read_text(

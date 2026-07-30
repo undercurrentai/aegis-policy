@@ -184,15 +184,34 @@ class TestCrossRepoCheckoutPattern:
 
     def test_uses_job_workflow_context_for_callee_resolution(self):
         """Primary path: job.workflow_* returns callee values per Contexts
-        reference §job (GitHub.com cloud)."""
+        reference §job (GitHub.com cloud).
+
+        Pins the ENV-WIRING SHAPE, not a raw substring: comments and a
+        core.info() diagnostic string also contain the literal
+        'job.workflow_sha', so a substring check stayed green when the actual
+        wiring was mutated to github.workflow_sha — the exact §37.17 bug
+        (v1.4.1 audit, mutation-verified)."""
         wf = REUSABLE_WORKFLOW.read_text()
-        assert "job.workflow_sha" in wf, (
-            "Reusable workflow MUST reference job.workflow_sha (callee's SHA) "
-            "in the resolve_callee step. See §37.18.3 primary resolution path."
+        assert re.search(
+            r"JOB_WORKFLOW_SHA:\s*\$\{\{\s*job\.workflow_sha\s*\}\}", wf
+        ), (
+            "resolve_callee env wiring MUST be "
+            "`JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}` — the callee-scoped "
+            "context. github.workflow_sha resolves to CALLER values in "
+            "cross-repo workflow_call. See §37.18.3."
         )
-        assert "job.workflow_repository" in wf, (
-            "Reusable workflow MUST reference job.workflow_repository "
-            "(callee's owner/repo). See §37.18.3 primary resolution path."
+        assert re.search(
+            r"JOB_WORKFLOW_REPOSITORY:\s*\$\{\{\s*job\.workflow_repository\s*\}\}", wf
+        ), (
+            "resolve_callee env wiring MUST be "
+            "`JOB_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}`. "
+            "See §37.18.3."
+        )
+        assert not re.search(
+            r"JOB_WORKFLOW_(?:SHA|REPOSITORY):\s*\$\{\{\s*github\.", wf
+        ), (
+            "resolve_callee env wiring consumes the github.* context — the "
+            "§37.17 cross-repo bug reintroduced at the wiring site."
         )
 
     def test_has_referenced_workflows_api_fallback(self):
@@ -356,8 +375,16 @@ class TestSelftestWorkflowF4Regression:
             # `success()` is EXCLUDED — it would re-introduce the F4 bug
             # (assert would skip on upstream FAILED, defeating the purpose).
             # /quality-gate Phase 3 /ultrathink Probe 3 tightening.
+            # Strip `!`-negated tokens first: `if: ${{ !failure() }}` CONTAINS
+            # "failure()" yet reintroduces exactly the F4 skip-on-upstream-fail
+            # semantics (v1.4.1 audit). Only un-negated occurrences count.
+            unnegated = re.sub(r"!\s*(always|cancelled|failure)\(\)", "", if_clause)
             run_on_fail_patterns = ("always()", "!cancelled()", "failure()")
-            assert any(p in if_clause for p in run_on_fail_patterns), (
+            assert (
+                "always()" in unnegated
+                or "!cancelled()" in if_clause
+                or "failure()" in unnegated
+            ), (
                 f"{assert_job_name} must declare `if:` with one of {run_on_fail_patterns} "
                 f"so the assertion runs even when the upstream reusable-workflow "
                 f"invocation fails (composite exits 1 on valid=false). "
@@ -505,7 +532,9 @@ class TestTestsWorkflowInvariants:
 
     def test_actions_are_sha_pinned(self):
         wf = TESTS_WORKFLOW.read_text()
-        unpinned = re.findall(r"uses:\s*(\S+@(?!\w{40})\S+)", wf)
+        # Hex-40, not \w{40}: a 40-char branch/tag NAME is mutable but matched
+        # \w{40}, defeating the pin check (v1.4.1 audit). A git SHA is hex.
+        unpinned = re.findall(r"uses:\s*(\S+@(?![0-9a-fA-F]{40}\b)\S+)", wf)
         assert not unpinned, f"unpinned actions in tests.yml: {unpinned}"
 
     def test_job_is_time_bounded(self):
@@ -525,20 +554,25 @@ class TestTestsWorkflowInvariants:
         distinguishes executed from merely collected.
         """
         wf = TESTS_WORKFLOW.read_text()
-        assert "--junitxml" in wf, "the suite step must emit a JUnit report"
-        # Comment lines are stripped first: the step's own commentary explains
-        # why --collect-only was abandoned, and a naive substring check would
-        # match that explanation instead of the command it warns about.
-        executable = "\n".join(
-            line for line in wf.splitlines() if not line.lstrip().startswith("#")
+        executable = _executable_lines(wf)
+        # BOTH jobs carry the guard pair — count, don't just detect: deleting
+        # the verifier-kit job's entire guard step left the matrix job's copy
+        # satisfying single-occurrence assertions while the 19
+        # highest-severity tests lost their executed-count guard (v1.4.1
+        # audit, mutation-verified). Comment-stripped so commentary can't
+        # satisfy the positives.
+        assert executable.count("--junitxml") == 2, (
+            "BOTH the matrix suite step and the verifier-kit step must emit "
+            "JUnit reports — one --junitxml per job."
+        )
+        assert executable.count('tc.find("skipped") is None') == 2, (
+            "BOTH jobs must carry the executed-not-collected guard "
+            "(<skipped/> exclusion) — a single copy means one job's tests "
+            "can silently stop executing."
         )
         assert "--collect-only" not in executable, (
             "collection-based counting is the defect this step was rewritten to "
             "fix — a collected test can be a skipped test."
-        )
-        assert 'tc.find("skipped") is None' in wf, (
-            "the guard must exclude <skipped/> testcases, or a blanket skip mark "
-            "walks straight through it again."
         )
 
     def test_sdk_needing_tests_are_partitioned_by_marker(self):
@@ -668,14 +702,16 @@ class TestCiInstallsArePinned:
     workflow_dispatch-only (not a PR surface) and is being retired.
     """
 
-    # (workflow, lockfile it must install)
+    # (workflow, lockfiles its jobs may install — tests.yml has TWO: the
+    # matrix job's requirements-ci.txt and the verifier-kit job's
+    # requirements-verify-ci.txt)
     INSTALLING_WORKFLOWS = [
-        (TESTS_WORKFLOW, "requirements-ci.txt"),
-        (ERROR_CLASS_PARITY_WORKFLOW, "requirements-ci.txt"),
-        (FINGERPRINT_PARITY_WORKFLOW, "requirements-ci.txt"),
-        (LINT_WORKFLOW, "requirements-aux-ci.txt"),
-        (SHADOW_EVAL_WORKFLOW, "requirements-aux-ci.txt"),
-        (RESOLVE_CALLEE_PARITY_WORKFLOW, "requirements-aux-ci.txt"),
+        (TESTS_WORKFLOW, ("requirements-ci.txt", "requirements-verify-ci.txt")),
+        (ERROR_CLASS_PARITY_WORKFLOW, ("requirements-ci.txt",)),
+        (FINGERPRINT_PARITY_WORKFLOW, ("requirements-ci.txt",)),
+        (LINT_WORKFLOW, ("requirements-aux-ci.txt",)),
+        (SHADOW_EVAL_WORKFLOW, ("requirements-aux-ci.txt",)),
+        (RESOLVE_CALLEE_PARITY_WORKFLOW, ("requirements-aux-ci.txt",)),
     ]
 
     # (human-readable source, compiled lockfile)
@@ -686,49 +722,47 @@ class TestCiInstallsArePinned:
     ]
 
     @pytest.mark.parametrize(
-        "wf_path,lockfile",
+        "wf_path,lockfiles",
         INSTALLING_WORKFLOWS,
         ids=[p.name for p, _ in INSTALLING_WORKFLOWS],
     )
-    def test_installs_from_hashed_lockfile_only(self, wf_path, lockfile):
+    def test_installs_from_hashed_lockfile_only(self, wf_path, lockfiles):
+        """PER-COMMAND, not file-global: the v1.4.1 audit mutation-verified
+        that whole-file substring checks pass when a SECOND unpinned install
+        line is added (`pip install --upgrade setuptools`, `-U requests`,
+        `-r requirements-extra.txt`) because the flags are satisfied by the
+        legitimate line. Every pip-install command line must individually be
+        a pinned install of one of the workflow's declared lockfiles."""
         executable = _executable_lines(wf_path.read_text())
-        assert lockfile in executable, (
-            f"{wf_path.name} must install the hash-pinned {lockfile}"
-        )
-        assert "--require-hashes" in executable, (
-            f"{wf_path.name} must pass --require-hashes so pip verifies "
-            f"artifact digests instead of trusting the index"
-        )
-        assert "--no-deps" in executable, (
-            f"{wf_path.name} must pass --no-deps so pip performs no "
-            f"resolution at all — the lockfile IS the closure"
-        )
-        assert "--only-binary=:all:" in executable, (
-            f"{wf_path.name} must pass --only-binary=:all: — without it, "
-            f"pip's hash-checking mode can fall back to a HASHED SDIST and "
-            f"fetch its build dependencies from live PyPI unpinned "
-            f"(reproduced in the v1.4.0 audit). Wheel-only fails closed."
-        )
-        # Ban the INSTALL of the open-range files, not any mention of them —
-        # the parity workflows legitimately list requirements-dev.txt in
-        # their push `paths:` filters (change-visibility, not execution).
-        assert not re.search(
-            r"(?:-r|--requirement)[=\s]+\S*requirements-(?:dev|aux|verify)\.txt",
-            executable,
-        ), (
-            f"{wf_path.name} installs an open-range requirements SOURCE file "
-            f"(live-PyPI resolution at run time). Install its compiled "
-            f"lockfile instead."
-        )
-        assert not re.search(r"pip install (?:--quiet )?['\"]?[A-Za-z]", executable), (
-            f"{wf_path.name} pip-installs a bare package name — a "
-            f"latest-version live-PyPI resolution. Add it to the appropriate "
-            f"requirements source file and regenerate the lockfile."
-        )
-        assert "--upgrade pip" not in executable, (
+        install_lines = re.findall(r"[^\n]*pip install[^\n]*", executable)
+        assert install_lines, f"{wf_path.name}: no pip install line found"
+        for line in install_lines:
+            line = line.strip()
+            hits_lockfile = any(
+                re.search(rf"(?:-r|--requirement)[=\s]+\S*{re.escape(lf)}", line)
+                for lf in lockfiles
+            )
+            assert (
+                "--require-hashes" in line
+                and "--no-deps" in line
+                and "--only-binary=:all:" in line
+                and hits_lockfile
+            ), (
+                f"{wf_path.name}: pip install line is not a pinned install of "
+                f"one of {lockfiles} with --no-deps --require-hashes "
+                f"--only-binary=:all: — every install must be a lockfile "
+                f"closure, no side-channel installs. Offending: {line!r}"
+            )
+            assert not re.search(
+                r"(?:-r|--requirement)[=\s]+\S*requirements-(?:dev|aux|verify)\.txt",
+                line,
+            ), (
+                f"{wf_path.name} installs an open-range requirements SOURCE "
+                f"file (live-PyPI resolution at run time): {line!r}"
+            )
+        assert "--upgrade pip" not in executable and "-U pip" not in executable, (
             f"{wf_path.name} upgrades pip from live PyPI — itself an "
-            f"unpinned install of the exact class this step exists to close. "
-            f"The setup-python bundled pip supports --require-hashes."
+            f"unpinned install of the exact class this step exists to close."
         )
 
     @pytest.mark.parametrize(
@@ -855,8 +889,16 @@ class TestAggregatorAbsentLaneDiagnostics:
             "ownership to the `*` line."
         )
         wf = LINT_WORKFLOW.read_text()
-        assert re.search(r'errors"?\)?\s*\.get\("errors"', wf) or 'get("errors"' in wf, (
-            "the guard must parse the errors array and fail on non-empty"
+        assert 'get("errors"' in wf, (
+            "the guard must parse the errors array from the API response"
+        )
+        # Pin the FAIL behavior, not just the parse: a mutation downgrading
+        # the non-empty branch to log-only kept the old assertions green
+        # while the downgrade detection became advisory (v1.4.1 audit).
+        assert re.search(r"if errors:[\s\S]{0,600}?sys\.exit\(1\)", wf), (
+            "the guard must sys.exit(1) on a non-empty errors array — "
+            "logging the downgrade without failing the required check is "
+            "exactly the silent-lapse this guard exists to prevent."
         )
 
     def test_each_reviewer_job_exports_its_review_step_outcome(self):
@@ -908,6 +950,48 @@ class TestAggregatorAbsentLaneDiagnostics:
         )
 
 
+class TestAggregatorReviewedSurfaceSubset:
+    """A binding auto-approval requires changed-files ⊆ reviewed surface.
+
+    The three reviewers only see the GATED_PATHS diff; without the subset
+    rule a PR bundling a reviewed file with a file OUTSIDE both GATED_PATHS
+    and the trust-spine carve-out (e.g. a new root conftest.py) would be
+    machine-approved with zero eyes on the unreviewed file (v1.4.1 audit,
+    HIGH). These pins keep the rule and its blocking teeth in place."""
+
+    def test_gate_blocks_on_files_outside_reviewed_surface(self):
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        assert "REVIEWED_SURFACE" in wf and "const unreviewed = changed.find" in wf, (
+            "the aggregator must compute the unreviewed set from the changed "
+            "files against REVIEWED_SURFACE"
+        )
+        assert re.search(
+            r"if \(unreviewed\) \{\s*\n\s*return decide\('block'", wf
+        ), (
+            "a changed file outside the reviewed surface must BLOCK the "
+            "auto-approval — anything weaker approves code sight-unseen"
+        )
+
+    def test_reviewed_surface_mirrors_gated_paths(self):
+        """The JS REVIEWED_SURFACE list must contain every GATED_PATHS entry
+        (env block), so the subset rule and the diff surface can't drift."""
+        wf = AI_SECOND_REVIEW_WORKFLOW.read_text()
+        # [ \t]+ not \s+ — \s crosses the blank line at the end of the block
+        # scalar and swallows the next top-level keys (jobs:, gpt-review:).
+        m = re.search(r"GATED_PATHS: >-\n((?:[ \t]+\S+\n)+)", wf)
+        assert m, "GATED_PATHS env block not found"
+        gated = m.group(1).split()
+        js = re.search(r"const REVIEWED_SURFACE = \[([\s\S]*?)\];", wf)
+        assert js, "REVIEWED_SURFACE array not found"
+        js_entries = set(re.findall(r"'([^']+)'", js.group(1)))
+        missing = [g for g in gated if g not in js_entries]
+        assert not missing, (
+            f"GATED_PATHS entries missing from REVIEWED_SURFACE: {missing} — "
+            f"the subset rule would spuriously block (or, if widened the "
+            f"other way, silently approve) on drifted entries."
+        )
+
+
 class TestAggregatorRenameCoverage:
     """The trust-spine carve-out must see BOTH sides of a rename.
 
@@ -928,10 +1012,14 @@ class TestAggregatorRenameCoverage:
             "to the carve-out (layer 1) and lands on the `*` CODEOWNERS "
             "line (layer 2)."
         )
-        m = re.search(r"const changed = files\.flatMap\([\s\S]{0,200}?previous_filename", wf)
-        assert m, (
-            "the changed-files mapping must consume previous_filename "
-            "directly (files.flatMap((f) => f.previous_filename ? "
-            "[f.filename, f.previous_filename] : [f.filename])) — a "
-            "comment mentioning it is not the fix."
+        # Pin the EMITTING array, not mere proximity: a mutation keeping
+        # previous_filename in the ternary CONDITION while dropping it from
+        # the emitted array (`f.previous_filename ? [f.filename] : ...`)
+        # satisfied the old proximity regex while reintroducing full
+        # rename-blindness (v1.4.1 audit, mutation-verified).
+        assert re.search(r"\[\s*f\.filename\s*,\s*f\.previous_filename\s*\]", wf), (
+            "the rename branch must EMIT both paths — "
+            "[f.filename, f.previous_filename] — consuming previous_filename "
+            "in a condition without emitting the old path is rename-blindness "
+            "in different clothes."
         )

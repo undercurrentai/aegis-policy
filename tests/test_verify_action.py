@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -73,7 +74,10 @@ def _run_verify(
     env.update(env_overrides)
     if github_output_path is not None:
         env["GITHUB_OUTPUT"] = str(github_output_path)
-    if cwd is not None:
+    if cwd is not None and "GITHUB_WORKSPACE" not in env_overrides:
+        # Convenience default only — an EXPLICIT GITHUB_WORKSPACE override
+        # wins, so tests can decouple workspace from cwd (the @-path
+        # resolution test depends on them differing; v1.4.1 audit).
         env["GITHUB_WORKSPACE"] = str(cwd)
 
     result = subprocess.run(
@@ -317,10 +321,21 @@ class TestEnvelopeParsing:
         assert outputs["decision-id"] == m["decision_id"]
 
     def test_at_path_workspace_relative(self, tmp_path: Path):
-        """@<workspace-relative-path> resolves under $GITHUB_WORKSPACE."""
+        """@<workspace-relative-path> resolves under $GITHUB_WORKSPACE — and
+        specifically NOT under the process cwd.
+
+        The workspace and the cwd are DIFFERENT directories here, with the
+        envelope present only in the workspace: a resolver that ignored
+        GITHUB_WORKSPACE and used Path.cwd() would fail this test. (The
+        previous form set cwd == workspace, so the two resolution strategies
+        were indistinguishable — v1.4.1 audit, mutation-verified.)
+        """
         m = MANIFEST["envelope_valid_preview"]
-        # Copy the envelope into tmp_path so we test workspace-relative resolution
-        envelope_copy = tmp_path / "my-envelope.json"
+        workspace = tmp_path / "workspace"
+        elsewhere = tmp_path / "elsewhere"
+        workspace.mkdir()
+        elsewhere.mkdir()
+        envelope_copy = workspace / "my-envelope.json"
         envelope_copy.write_bytes((FIXTURES / m["path"]).read_bytes())
 
         env = _common_env()
@@ -328,9 +343,12 @@ class TestEnvelopeParsing:
             "AEGIS_ENVELOPE": "@my-envelope.json",  # relative to GITHUB_WORKSPACE
             "AEGIS_EXPECTED_DIGEST": m["artifact_digest"],
             "AEGIS_EXPECTED_ENVIRONMENT": m["environment"],
+            "GITHUB_WORKSPACE": str(workspace),
         })
+        # cwd=elsewhere; the explicit GITHUB_WORKSPACE override above wins
+        # over _run_verify's cwd-derived default (env_overrides applied last).
         rc, _, _, outputs = _run_verify(
-            env, github_output_path=tmp_path / "outputs", cwd=tmp_path
+            env, github_output_path=tmp_path / "outputs", cwd=elsewhere
         )
         assert rc == 0
         assert outputs["valid"] == "true"
@@ -359,9 +377,21 @@ class TestOutputEmission:
             "replay-checked",
         }
         assert set(outputs.keys()) == expected_keys
-        # No KEY=VALUE pair has embedded newline (line-based format invariant)
-        for line in output_file.read_text().splitlines():
-            assert "\n" not in line
+        # Line-based format invariant, asserted for real: exactly one
+        # well-formed KEY=VALUE line per output. (The previous form —
+        # `assert "\n" not in line` over splitlines() — was tautologically
+        # true for every possible file; a value with an embedded newline
+        # produced an ignored extra line and still passed. v1.4.1 audit.)
+        lines = output_file.read_text().splitlines()
+        assert len(lines) == len(expected_keys), (
+            f"expected exactly {len(expected_keys)} KEY=VALUE lines, got "
+            f"{len(lines)} — an extra line means a value embedded a newline "
+            f"(a $GITHUB_OUTPUT injection vector)"
+        )
+        for line in lines:
+            assert re.fullmatch(r"[a-z-]+=.*", line), (
+                f"malformed output line {line!r}"
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

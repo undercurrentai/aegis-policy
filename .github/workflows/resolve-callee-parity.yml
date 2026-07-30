@@ -70,7 +70,8 @@ jobs:
         # Block scalar, not a plain one-liner: `--only-binary=:all: -r` holds
         # a `: ` sequence, which YAML forbids inside an unquoted plain scalar.
         run: |
-          pip install --no-deps --require-hashes --only-binary=:all: -r requirements-aux-ci.txt
+          python -m pip install --no-deps --require-hashes --only-binary=:all: -r requirements-aux-ci.txt
+          python -m pip check
 
       - name: Extract inline YAML bodies + .mjs body
         run: |

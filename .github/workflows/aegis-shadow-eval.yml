@@ -26,9 +26,17 @@ jobs:
     # (id 16294975). Check context must match the ruleset's required_status_checks
     # entry "AEGIS Shadow Evaluation" exactly — the prior "(advisory)" suffix
     # caused a check-name mismatch that blocked PR #5 admin-squash-merge until
-    # this rename. continue-on-error retained so a transient AEGIS API outage
-    # doesn't permanently block PRs; the ruleset's strict-required-checks
-    # policy will still require completion.
+    # this rename.
+    #
+    # HONESTY NOTE on continue-on-error (v1.4.1 audit): job-level
+    # continue-on-error greens the workflow RUN but the JOB check-run still
+    # concludes `failure`, and the ruleset gates on the job check-run — so it
+    # protects nothing against an API outage (aegis-enforce.yml documents the
+    # same from live debugging). The ACTUAL outage protection is the script's
+    # unconditional exit 0. Residual: a checkout or hash-pinned-install step
+    # failure (PyPI outage, wheel yank) still reddens this required check with
+    # no recourse but re-run — accepted, same class as every other required
+    # check's install step. continue-on-error retained only as belt-and-braces.
     continue-on-error: true
     # Required check (org ruleset 16294975) — bound the billed-runner ceiling.
     timeout-minutes: 10
@@ -65,7 +73,11 @@ jobs:
           import os, sys, httpx, json
           api_key = os.environ.get("AEGIS_API_KEY", "").strip()
           if not api_key:
-              print("WARN: AEGIS_API_KEY not configured; skipping shadow-eval")
+              print("::warning::AEGIS shadow-eval DEGRADED — AEGIS_API_KEY not configured")
+              gh = os.environ.get("GITHUB_STEP_SUMMARY")
+              if gh:
+                  with open(gh, "a") as f:
+                      f.write("## AEGIS Shadow Evaluation\n\n- **Status**: `DEGRADED (no API key; no decision recorded)`\n")
               sys.exit(0)
           payload = {
               "proposal_summary": f"PR #{os.environ['PR_NUM']}: {os.environ['PR_TITLE']}",
@@ -73,9 +85,26 @@ jobs:
               "risk_baseline": 0.05,
               "risk_proposed": 0.05,
           }
+          def degraded(reason):
+              # A dead advisory lane must be VISIBLE without becoming blocking:
+              # every failure path here exits 0 (advisory by contract), so the
+              # only honest signal is an annotation + a degraded step summary —
+              # otherwise the decision-audit trail can stop silently while the
+              # required check stays green (the absence-of-signal class this
+              # repo keeps re-learning).
+              print(f"::warning::AEGIS shadow-eval DEGRADED — {reason}")
+              gh_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if gh_summary:
+                  with open(gh_summary, "a") as f:
+                      f.write(f"## AEGIS Shadow Evaluation\n\n- **Status**: `DEGRADED (no decision recorded)`\n- **Reason**: `{reason}`\n")
+              sys.exit(0)
           try:
+              # Custom domain per org convention (aegis-governance G74/v4.7.15):
+              # remote callers use api.aegis.undercurrentholdings.com; the raw
+              # Cloud Run URL is internal-only (deploy probes). The sibling
+              # aegis-enforce.yml already defaults to the custom domain.
               r = httpx.post(
-                  "https://aegis-api-980022636831.us-central1.run.app/evaluate",
+                  "https://api.aegis.undercurrentholdings.com/evaluate",
                   json=payload,
                   headers={"Authorization": f"Bearer {api_key}"},
                   timeout=30.0,
@@ -91,6 +120,5 @@ jobs:
                   with open(gh_summary, "a") as f:
                       f.write(f"## AEGIS Shadow Evaluation\n\n- **Status**: `{status}`\n- **Decision ID**: `{decision_id}`\n")
           except Exception as e:
-              print(f"WARN: AEGIS shadow-eval call failed: {e}")
-              sys.exit(0)
+              degraded(f"evaluate call failed: {e}")
           PY

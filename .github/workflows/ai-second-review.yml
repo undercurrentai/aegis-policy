@@ -1464,6 +1464,31 @@ jobs:
                 `trust-spine path touched (${trustSpineHit}) — human-only per §44.4 carve-out`);
             }
 
+            // Reviewed-surface SUBSET rule (v1.4.1 audit, HIGH): the diff the
+            // three reviewers saw is restricted to GATED_PATHS, so a binding
+            // auto-approval is only sound when every changed file lies inside
+            // that surface. Without this, a PR bundling a reviewed file with a
+            // file OUTSIDE both GATED_PATHS and the carve-out (e.g. a new root
+            // conftest.py — auto-executed by pytest in every CI venv) would be
+            // approved with zero human or AI eyes on the unreviewed file.
+            // GATED prefixes mirror the diff step's GATED_PATHS env verbatim;
+            // an entry ending in '/' is a prefix, otherwise exact-or-glob via
+            // the same matchesGlob vocabulary.
+            const REVIEWED_SURFACE = [
+              'keys/', 'schema/', 'policy/', '.github/CODEOWNERS',
+              '.github/workflows/', 'docs/architecture/adr/',
+              'scripts/check_*.py', 'scripts/_verify_local_vendored.py',
+              'README.md', 'CHANGELOG.md', 'docs/', 'tests/',
+            ];
+            const inSurface = (f) => REVIEWED_SURFACE.some((p) =>
+              p.endsWith('/') ? f.startsWith(p) : matchesGlob(f, p));
+            const unreviewed = changed.find((f) => !inSurface(f));
+            if (unreviewed) {
+              return decide('block',
+                `changed file outside the reviewed surface (${unreviewed}) — ` +
+                `auto-approval requires changed-files ⊆ GATED_PATHS; human review needed`);
+            }
+
             // §54.3 D-lock: change_class != aegis-self-tune. Signal sources:
             // PR label `aegis-self-tune`, a `change_class: aegis-self-tune`
             // footer in the body, or `[aegis-self-tune]` in the title. (For
@@ -1471,10 +1496,27 @@ jobs:
             // carve-out above usually catches it first; this is the second
             // layer for any self-tune change outside carve-out paths. Phase 3
             // adds the AEGIS Stage-2 change_type signal — #268.)
+            // Signals are re-fetched LIVE via pulls.get, not read from the
+            // event payload: trigger types carry no `labeled`/`edited`, so the
+            // payload is stale as of the last synchronize — a label added
+            // after the final push would otherwise never be seen (v1.4.1
+            // audit; same live-read pattern as the TOCTOU head-SHA re-check
+            // below). Payload values remain the fallback if the API call
+            // fails — fetch failure must not fail OPEN past the D-lock.
             let labels = [];
             try { labels = JSON.parse(process.env.PR_LABELS || '[]'); } catch { labels = []; }
-            const body = process.env.PR_BODY || '';
-            const title = process.env.PR_TITLE || '';
+            let body = process.env.PR_BODY || '';
+            let title = process.env.PR_TITLE || '';
+            try {
+              const { data: live } = await github.rest.pulls.get({
+                owner, repo, pull_number: prNumber,
+              });
+              labels = (live.labels || []).map((l) => l.name);
+              body = live.body || '';
+              title = live.title || '';
+            } catch (e) {
+              core.warning(`live PR metadata fetch failed (${e.message}) — using event payload (stale-label risk)`);
+            }
             const selfTune =
               labels.some((l) => String(l).toLowerCase() === 'aegis-self-tune') ||
               /change_class\s*:\s*aegis-self-tune/i.test(body) ||

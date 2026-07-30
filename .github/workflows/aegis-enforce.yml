@@ -260,7 +260,7 @@ jobs:
                 throw new Error('REUSABLE_WORKFLOW_FILENAME env var not set; cannot build SELF_REGEX (caller workflow step must set it in env:)');
               }
               const SELF_REGEX = new RegExp(
-                `^([^/]+)/([^/]+)/\\.github/workflows/${REUSABLE_WORKFLOW_FILENAME.replace(/\./g, '\\.')}(?:@.*)?$`,
+                `^([^/]+)/([^/]+)/\\.github/workflows/${REUSABLE_WORKFLOW_FILENAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:@.*)?$`,
               );
               // Collect ALL matches (not just first) to detect multi-match
               // ambiguity per /quality-gate Phase 3 /ultrathink U6 (MEDIUM/C2):
@@ -321,6 +321,11 @@ jobs:
                 );
               }
               resolvedRef = matchingEntry.sha || matchingEntry.ref;
+              if (!resolvedRef) {
+                // Neither sha nor ref: refuse — empty output means the downstream
+                // checkout silently lands on the default branch (v1.4.1 audit).
+                throw new Error('referenced_workflows entry has neither .sha nor .ref; refusing unpinned checkout');
+              }
               resolutionPath = 'referenced_workflows-API';
             }
 
@@ -438,10 +443,17 @@ jobs:
             // summary + step outputs still carry the verdict) instead of failing
             // this always() step.
             try {
+              // On pull_request-triggered callers context.sha is the ephemeral
+              // MERGE-commit SHA, which the PR checks UI does not display — the
+              // advisory verdict detail (incl. the DEGRADED banner, the
+              // operator's outage signal) would be invisible and the dedupe
+              // would never match across re-runs. Attach to the PR head SHA
+              // when present (v1.4.1 audit).
+              const attachSha = context.payload.pull_request?.head?.sha || context.sha;
               const { data: existing } = await github.rest.checks.listForRef({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                ref: context.sha,
+                ref: attachSha,
                 check_name: CHECK_NAME,
               });
               const runs = (existing && existing.check_runs) || [];
@@ -456,7 +468,7 @@ jobs:
                 await github.rest.checks.update({ ...payload, check_run_id: runs[0].id });
                 core.info(`Updated existing "${CHECK_NAME}" check run ${runs[0].id}: ${conclusion}`);
               } else {
-                await github.rest.checks.create({ ...payload, name: CHECK_NAME, head_sha: context.sha });
+                await github.rest.checks.create({ ...payload, name: CHECK_NAME, head_sha: attachSha });
                 core.info(`Created "${CHECK_NAME}" check run: ${conclusion}`);
               }
             } catch (e) {

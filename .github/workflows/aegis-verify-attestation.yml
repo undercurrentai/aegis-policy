@@ -75,7 +75,7 @@ on:
         type: string
         default: "3.13"
       aegis-sdk-version:
-        description: "PyPI version pin for aegis-governance[verify] SDK. Used when aegis-sdk-git-ref is empty. Until task #59 (PyPI publish) lands, set aegis-sdk-git-ref instead."
+        description: "PyPI version pin for aegis-governance[verify] SDK. Used when aegis-sdk-git-ref is empty — the DEFAULT install path: aegis-governance[verify] has been on public PyPI since 2026-05-15 (task #59), no secret or Git access needed."
         required: false
         type: string
         default: "1.0.0"
@@ -277,7 +277,7 @@ jobs:
                 throw new Error('REUSABLE_WORKFLOW_FILENAME env var not set; cannot build SELF_REGEX (caller workflow step must set it in env:)');
               }
               const SELF_REGEX = new RegExp(
-                `^([^/]+)/([^/]+)/\\.github/workflows/${REUSABLE_WORKFLOW_FILENAME.replace(/\./g, '\\.')}(?:@.*)?$`,
+                `^([^/]+)/([^/]+)/\\.github/workflows/${REUSABLE_WORKFLOW_FILENAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:@.*)?$`,
               );
               // Collect ALL matches (not just first) to detect multi-match
               // ambiguity per /quality-gate Phase 3 /ultrathink U6 (MEDIUM/C2):
@@ -338,6 +338,11 @@ jobs:
                 );
               }
               resolvedRef = matchingEntry.sha || matchingEntry.ref;
+              if (!resolvedRef) {
+                // Neither sha nor ref: refuse — empty output means the downstream
+                // checkout silently lands on the default branch (v1.4.1 audit).
+                throw new Error('referenced_workflows entry has neither .sha nor .ref; refusing unpinned checkout');
+              }
               resolutionPath = 'referenced_workflows-API';
             }
 
