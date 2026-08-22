@@ -44,4 +44,4 @@ PyYAML>=6.0
 # <47 to >=48.0.1,<49; the SDK's own range now implies this, but the floor
 # stays HERE too so a future SDK range loosening can never silently resolve
 # back into the vulnerable window.
-cryptography>=48.0.1
+cryptography>=50.0.0
