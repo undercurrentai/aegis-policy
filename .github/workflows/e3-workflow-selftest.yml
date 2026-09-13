@@ -211,7 +211,7 @@ jobs:
       decision-id: ${{ needs.selftest-replay-first.outputs.decision-id }}
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
       - name: Seed replay store with first call's decision_id
         env:
           DECISION_ID: ${{ needs.selftest-replay-first.outputs.decision-id }}
@@ -249,7 +249,7 @@ jobs:
     needs: selftest-replay-second-setup
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
       - name: Download seeded replay store
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
