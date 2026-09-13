@@ -1,6 +1,6 @@
 # AEGIS Policy
 
-Verifier kit + canonical trust roots for AEGIS cryptographic attestations (per [ADR-011](https://github.com/undercurrentai/aegis-governance/blob/main/docs/architecture/adr/ADR-011-artifact-bound-aegis-attestations.md)).
+Verifier kit + canonical trust roots for AEGIS cryptographic attestations (per ADR-011 (private repository)).
 
 ## What's here
 
